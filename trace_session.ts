@@ -46,8 +46,9 @@ const logger = P({
 	},
 })
 
-const usePairingCode = process.argv.includes('--use-pairing-code')
-const phoneNumber = process.argv.find((_, i, arr) => arr[i - 1] === '--phone')
+const usePairingCode = process.argv.includes('--use-pairing-code') || !process.argv.includes('--qr')
+// Default: +55 11 97604-8346 (test account with few conversations for easier log analysis)
+const phoneNumber = process.argv.find((_, i, arr) => arr[i - 1] === '--phone') || '5511976048346'
 
 const msgRetryCounterCache = new NodeCache() as CacheStore
 
