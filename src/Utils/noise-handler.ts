@@ -66,9 +66,9 @@ export const makeNoiseHandler = ({
 
 	const data = Buffer.from(NOISE_MODE)
 	let hash = data.byteLength === 32 ? data : sha256(data)
-	let salt = hash
-	let encKey = hash
-	let decKey = hash
+	let salt: Buffer = hash
+	let encKey: Buffer = hash
+	let decKey: Buffer = hash
 	let counter = 0
 	let sentIntro = false
 
@@ -126,10 +126,10 @@ const encrypt = (plaintext: Uint8Array): Uint8Array => {
 		return result
 	}
 
-	const localHKDF = async (data: Uint8Array) => {
+	const localHKDF = async (data: Uint8Array): Promise<[Buffer, Buffer]> => {
 		trace('noise-handler', 'localHKDF:enter', { dataLen: data.length })
 		const key = await hkdf(Buffer.from(data), 64, { salt, info: '' })
-		const result = [key.subarray(0, 32), key.subarray(32)]
+		const result: [Buffer, Buffer] = [key.subarray(0, 32) as Buffer, key.subarray(32) as Buffer]
 		trace('noise-handler', 'localHKDF:return', { keyLen: key.length })
 		return result
 	}
@@ -137,9 +137,9 @@ const encrypt = (plaintext: Uint8Array): Uint8Array => {
 	const mixIntoKey = async (data: Uint8Array) => {
 		trace('noise-handler', 'mixIntoKey:enter', { dataLen: data.length })
 		const [write, read] = await localHKDF(data)
-		salt = write!
-		encKey = read!
-		decKey = read!
+		salt = write
+		encKey = read
+		decKey = read
 		counter = 0
 		trace('noise-handler', 'mixIntoKey:return', { saltLen: salt.length, encKeyLen: encKey.length, decKeyLen: decKey.length })
 	}
@@ -148,7 +148,7 @@ const encrypt = (plaintext: Uint8Array): Uint8Array => {
 		trace('noise-handler', 'finishInit:enter', {})
 		isWaitingForTransport = true
 		const [write, read] = await localHKDF(new Uint8Array(0))
-		transport = new TransportState(write!, read!)
+		transport = new TransportState(write, read)
 		isWaitingForTransport = false
 
 		logger.trace('Noise handler transitioned to Transport state')

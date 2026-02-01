@@ -11,6 +11,7 @@ import {
 	MIN_UPLOAD_INTERVAL,
 	NOISE_WA_HEADER,
 	PROCESSABLE_HISTORY_TYPES,
+	TimeMs,
 	UPLOAD_TIMEOUT
 } from '../Defaults'
 import type { LIDMapping, SocketConfig } from '../Types'
@@ -78,6 +79,8 @@ export const makeSocket = (config: SocketConfig) => {
 	} = config
 
 	const publicWAMBuffer = new BinaryInfo()
+
+	let serverTimeOffsetMs = 0
 
 	const uqTagId = generateMdTagPrefix()
 	const generateMessageTag = () => `${uqTagId}${epoch++}`
@@ -348,6 +351,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const pnFromLIDUSync = async (jids: string[]): Promise<LIDMapping[] | undefined> => {
+		trace('socket', 'pnFromLIDUSync:enter', { jidCount: jids.length })
 		const usyncQuery = new USyncQuery().withLIDProtocol().withContext('background')
 
 		for (const jid of jids) {
@@ -392,6 +396,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	/** await the next incoming message */
 	const awaitNextMessage = async <T>(sendMsg?: Uint8Array) => {
+		trace('socket', 'awaitNextMessage:enter', { hasSendMsg: !!sendMsg })
 		if (!ws.isOpen) {
 			throw new Boom('Connection Closed', {
 				statusCode: DisconnectReason.connectionClosed
@@ -468,6 +473,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const getAvailablePreKeysOnServer = async () => {
+		trace('socket', 'getAvailablePreKeysOnServer:enter', {})
 		const result = await query({
 			tag: 'iq',
 			attrs: {
@@ -479,7 +485,9 @@ export const makeSocket = (config: SocketConfig) => {
 			content: [{ tag: 'count', attrs: {} }]
 		})
 		const countChild = getBinaryNodeChild(result, 'count')!
-		return +countChild.attrs.value!
+		const count = +countChild.attrs.value!
+		trace('socket', 'getAvailablePreKeysOnServer:return', { count })
+		return count
 	}
 
 	// Pre-key upload state management
@@ -564,6 +572,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const uploadPreKeysToServerIfRequired = async () => {
+		trace('socket', 'uploadPreKeysToServerIfRequired:enter', {})
 		try {
 			let count = 0
 			const preKeyCount = await getAvailablePreKeysOnServer()
@@ -725,8 +734,9 @@ export const makeSocket = (config: SocketConfig) => {
 			}
 		}, keepAliveIntervalMs))
 	/** i have no idea why this exists. pls enlighten me */
-	const sendPassiveIq = (tag: 'passive' | 'active') =>
-		query({
+	const sendPassiveIq = (tag: 'passive' | 'active') => {
+		trace('socket', 'sendPassiveIq:enter', { tag })
+		return query({
 			tag: 'iq',
 			attrs: {
 				to: S_WHATSAPP_NET,
@@ -735,6 +745,7 @@ export const makeSocket = (config: SocketConfig) => {
 			},
 			content: [{ tag, attrs: {} }]
 		})
+	}
 
 	/** logout & invalidate connection */
 	const logout = async (msg?: string) => {
@@ -922,26 +933,8 @@ export const makeSocket = (config: SocketConfig) => {
 		trace('socket', 'CB:pair-success', { stanzaId: stanza.attrs.id })
 		logger.debug('pair success recv')
 		try {
-			const pairSuccessNode = getBinaryNodeChild(stanza, 'pair-success')
-			const deviceIdentityNode = getBinaryNodeChild(pairSuccessNode, 'device-identity')
-			const platformNode = getBinaryNodeChild(pairSuccessNode, 'platform')
-			const deviceNode = getBinaryNodeChild(pairSuccessNode, 'device')
-			const businessNode = getBinaryNodeChild(pairSuccessNode, 'biz') || null
-
-			if (!deviceIdentityNode || !deviceNode) {
-				throw new Boom('Missing device-identity or device in pair success node', { data: stanza })
-			}
-
-			const { reply, creds: updatedCreds } = configureSuccessfulPairing(
-				businessNode,
-				platformNode || null,
-				deviceNode,
-				deviceIdentityNode,
-				stanza.attrs.id || '',
-				creds.advSecretKey,
-				creds.signedIdentityKey,
-				creds.signalIdentities
-			)
+			updateServerTimeOffset(stanza)
+			const { reply, creds: updatedCreds } = configureSuccessfulPairing(stanza, creds)
 
 			trace('socket', 'pair-success:configured', { me: updatedCreds.me?.id, platform: updatedCreds.platform })
 			logger.info(
@@ -953,6 +946,7 @@ export const makeSocket = (config: SocketConfig) => {
 			ev.emit('connection.update', { isNewLogin: true, qr: undefined })
 
 			await sendNode(reply)
+			void sendUnifiedSession()
 		} catch (error: any) {
 			logger.info({ trace: error.stack }, 'error in pairing')
 			void end(error)
@@ -962,6 +956,7 @@ export const makeSocket = (config: SocketConfig) => {
 	ws.on('CB:success', async (node: BinaryNode) => {
 		trace('socket', 'CB:success', { lid: node.attrs?.lid })
 		try {
+			updateServerTimeOffset(node)
 			await uploadPreKeysToServerIfRequired()
 			await sendPassiveIq('active')
 
@@ -981,6 +976,7 @@ export const makeSocket = (config: SocketConfig) => {
 		ev.emit('creds.update', { me: { ...authState.creds.me!, lid: node.attrs.lid } })
 
 		ev.emit('connection.update', { connection: 'open' })
+		void sendUnifiedSession()
 
 		if (node.attrs.lid && authState.creds.me?.id) {
 			const myLID = node.attrs.lid
@@ -1091,6 +1087,58 @@ export const makeSocket = (config: SocketConfig) => {
 		Object.assign(creds, update)
 	})
 
+	const updateServerTimeOffset = ({ attrs }: BinaryNode) => {
+		trace('socket', 'updateServerTimeOffset:enter', { t: attrs?.t })
+		const tValue = attrs?.t
+		if (!tValue) {
+			return
+		}
+
+		const parsed = Number(tValue)
+		if (Number.isNaN(parsed) || parsed <= 0) {
+			return
+		}
+
+		const localMs = Date.now()
+		serverTimeOffsetMs = parsed * 1000 - localMs
+		trace('socket', 'updateServerTimeOffset:calculated', { offsetMs: serverTimeOffsetMs })
+		logger.debug({ offset: serverTimeOffsetMs }, 'calculated server time offset')
+	}
+
+	const getUnifiedSessionId = () => {
+		const offsetMs = 3 * TimeMs.Day
+		const now = Date.now() + serverTimeOffsetMs
+		const id = (now + offsetMs) % TimeMs.Week
+		trace('socket', 'getUnifiedSessionId:return', { id: id.toString() })
+		return id.toString()
+	}
+
+	const sendUnifiedSession = async () => {
+		trace('socket', 'sendUnifiedSession:enter', { wsOpen: ws.isOpen })
+		if (!ws.isOpen) {
+			return
+		}
+
+		const node = {
+			tag: 'ib',
+			attrs: {},
+			content: [
+				{
+					tag: 'unified_session',
+					attrs: {
+						id: getUnifiedSessionId()
+					}
+				}
+			]
+		}
+
+		try {
+			await sendNode(node)
+		} catch (error) {
+			logger.debug({ error }, 'failed to send unified_session telemetry')
+		}
+	}
+
 	return {
 		type: 'md' as 'md',
 		ws,
@@ -1114,6 +1162,8 @@ export const makeSocket = (config: SocketConfig) => {
 		digestKeyBundle,
 		rotateSignedPreKey,
 		requestPairingCode,
+		updateServerTimeOffset,
+		sendUnifiedSession,
 		wamBuffer: publicWAMBuffer,
 		/** Waits for the connection to WA to reach a state */
 		waitForConnectionUpdate: bindWaitForConnectionUpdate(ev),

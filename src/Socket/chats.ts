@@ -70,7 +70,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		getMessage
 	} = config
 	const sock = makeSocket(config)
-	const { ev, ws, authState, generateMessageTag, sendNode, query, signalRepository, onUnexpectedError, executeUSyncQuery } = sock
+	const { ev, ws, authState, generateMessageTag, sendNode, query, signalRepository, onUnexpectedError, executeUSyncQuery, sendUnifiedSession } = sock
 
 	let privacySettings: { [_: string]: string } | undefined
 
@@ -721,14 +721,19 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
 		trace('chats', 'sendPresenceUpdate:ENTRY', { type, toJid })
 		const me = authState.creds.me!
-		if (type === 'available' || type === 'unavailable') {
+		const isAvailableType = type === 'available'
+		if (isAvailableType || type === 'unavailable') {
 			if (!me.name) {
 				logger.warn('no name present, ignoring presence update request...')
 				return
 			}
 
-			ev.emit('connection.update', { isOnline: type === 'available' })
-			trace('chats', 'sendPresenceUpdate:EMIT', { event: 'connection.update', isOnline: type === 'available' })
+			ev.emit('connection.update', { isOnline: isAvailableType })
+			trace('chats', 'sendPresenceUpdate:EMIT', { event: 'connection.update', isOnline: isAvailableType })
+
+			if (isAvailableType) {
+				void sendUnifiedSession()
+			}
 
 			await sendNode({
 				tag: 'presence',
