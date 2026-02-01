@@ -1,6 +1,7 @@
 import PQueue from 'p-queue'
 import type { SignalDataSet, SignalDataTypeMap, SignalKeyStore } from '../Types'
 import type { ILogger } from './logger'
+import { trace } from './trace-logger'
 
 /**
  * Manages pre-key operations with proper concurrency control
@@ -34,6 +35,7 @@ export class PreKeyManager {
 		mutations: SignalDataSet,
 		isInTransaction: boolean
 	): Promise<void> {
+		trace('pre-key-manager', 'processOperations:enter', { keyType, isInTransaction })
 		const keyData = data[keyType]
 		if (!keyData) return
 
@@ -65,6 +67,7 @@ export class PreKeyManager {
 				await this.processDeletions(keyType, deletions, transactionCache, mutations, isInTransaction)
 			}
 		})
+		trace('pre-key-manager', 'processOperations:return', {})
 	}
 
 	/**
@@ -77,6 +80,7 @@ export class PreKeyManager {
 		mutations: SignalDataSet,
 		isInTransaction: boolean
 	): Promise<void> {
+		trace('pre-key-manager', 'processDeletions:enter', { keyType, idsCount: ids.length, isInTransaction })
 		if (isInTransaction) {
 			// In transaction, only allow deletion if key exists in cache
 			for (const keyId of ids) {
@@ -99,12 +103,14 @@ export class PreKeyManager {
 				}
 			}
 		}
+		trace('pre-key-manager', 'processDeletions:return', {})
 	}
 
 	/**
 	 * Validate and process pre-key deletions outside transactions
 	 */
 	async validateDeletions(data: SignalDataSet, keyType: keyof SignalDataTypeMap): Promise<void> {
+		trace('pre-key-manager', 'validateDeletions:enter', { keyType })
 		const keyData = data[keyType]
 		if (!keyData) return
 
@@ -122,5 +128,6 @@ export class PreKeyManager {
 				}
 			}
 		})
+		trace('pre-key-manager', 'validateDeletions:return', {})
 	}
 }

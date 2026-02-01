@@ -25,20 +25,24 @@ import type { ILogger } from './logger'
 import { LT_HASH_ANTI_TAMPERING } from './lt-hash'
 import { downloadContentFromMessage } from './messages-media'
 import { emitSyncActionResults, processContactAction } from './sync-action-utils'
+import { trace } from './trace-logger'
 
 type FetchAppStateSyncKey = (keyId: string) => Promise<proto.Message.IAppStateSyncKeyData | null | undefined>
 
 export type ChatMutationMap = { [index: string]: ChatMutation }
 
 const mutationKeys = async (keydata: Uint8Array) => {
+	trace('chat-utils', 'mutationKeys:enter', { keydataLength: keydata.length })
 	const expanded = await hkdf(keydata, 160, { info: 'WhatsApp Mutation Keys' })
-	return {
+	const result = {
 		indexKey: expanded.slice(0, 32),
 		valueEncryptionKey: expanded.slice(32, 64),
 		valueMacKey: expanded.slice(64, 96),
 		snapshotMacKey: expanded.slice(96, 128),
 		patchMacKey: expanded.slice(128, 160)
 	}
+	trace('chat-utils', 'mutationKeys:return', {})
+	return result
 }
 
 const generateMac = (
@@ -47,6 +51,7 @@ const generateMac = (
 	keyId: Uint8Array | string,
 	key: Buffer
 ) => {
+	trace('chat-utils', 'generateMac:enter', { operation, dataLength: data.length })
 	const getKeyData = () => {
 		let r: number
 		switch (operation) {
@@ -70,7 +75,9 @@ const generateMac = (
 	const total = Buffer.concat([keyData, data, last])
 	const hmac = hmacSign(total, key, 'sha512')
 
-	return hmac.slice(0, 32)
+	const result = hmac.slice(0, 32)
+	trace('chat-utils', 'generateMac:return', { macLength: result.length })
+	return result
 }
 
 const to64BitNetworkOrder = (e: number) => {
@@ -136,7 +143,12 @@ const generatePatchMac = (
 	return hmacSign(total, key)
 }
 
-export const newLTHashState = (): LTHashState => ({ version: 0, hash: Buffer.alloc(128), indexValueMap: {} })
+export const newLTHashState = (): LTHashState => {
+	trace('chat-utils', 'newLTHashState:enter', {})
+	const state = { version: 0, hash: Buffer.alloc(128), indexValueMap: {} }
+	trace('chat-utils', 'newLTHashState:return', { version: state.version })
+	return state
+}
 
 export const encodeSyncdPatch = async (
 	{ type, index, syncAction, apiVersion, operation }: WAPatchCreate,
@@ -144,6 +156,7 @@ export const encodeSyncdPatch = async (
 	state: LTHashState,
 	getAppStateSyncKey: FetchAppStateSyncKey
 ) => {
+	trace('chat-utils', 'encodeSyncdPatch:enter', { type, operation, apiVersion })
 	const key = !!myAppStateKeyId ? await getAppStateSyncKey(myAppStateKeyId) : undefined
 	if (!key) {
 		throw new Boom(`myAppStateKey ("${myAppStateKeyId}") not present`, { statusCode: 404 })
@@ -200,6 +213,7 @@ export const encodeSyncdPatch = async (
 	const base64Index = indexMac.toString('base64')
 	state.indexValueMap[base64Index] = { valueMac }
 
+	trace('chat-utils', 'encodeSyncdPatch:return', { version: state.version })
 	return { patch, state }
 }
 
@@ -210,6 +224,7 @@ export const decodeSyncdMutations = async (
 	onMutation: (mutation: ChatMutation) => void,
 	validateMacs: boolean
 ) => {
+	trace('chat-utils', 'decodeSyncdMutations:enter', { mutationsCount: msgMutations.length, validateMacs })
 	const ltGenerator = makeLtHashGenerator(initialState)
 	// indexKey used to HMAC sign record.index.blob
 	// valueEncryptionKey used to AES-256-CBC encrypt record.value.blob[0:-32]
@@ -252,7 +267,9 @@ export const decodeSyncdMutations = async (
 		})
 	}
 
-	return await ltGenerator.finish()
+	const result = await ltGenerator.finish()
+	trace('chat-utils', 'decodeSyncdMutations:return', { hashLen: result.hash?.length })
+	return result
 
 	async function getKey(keyId: Uint8Array) {
 		const base64Key = Buffer.from(keyId).toString('base64')
@@ -276,6 +293,7 @@ export const decodeSyncdPatch = async (
 	onMutation: (mutation: ChatMutation) => void,
 	validateMacs: boolean
 ) => {
+	trace('chat-utils', 'decodeSyncdPatch:enter', { name, version: msg.version?.version, validateMacs })
 	if (validateMacs) {
 		const base64Key = Buffer.from(msg.keyId!.id!).toString('base64')
 		const mainKeyObj = await getAppStateSyncKey(base64Key)
@@ -299,11 +317,13 @@ export const decodeSyncdPatch = async (
 	}
 
 	const result = await decodeSyncdMutations(msg.mutations!, initialState, getAppStateSyncKey, onMutation, validateMacs)
+	trace('chat-utils', 'decodeSyncdPatch:return', { hashLen: result.hash?.length })
 	return result
 }
 
-export const extractSyncdPatches = async (result: BinaryNode, options: RequestInit) => {
-	const syncNode = getBinaryNodeChild(result, 'sync')
+export const extractSyncdPatches = async (binaryNode: BinaryNode, options: RequestInit) => {
+	trace('chat-utils', 'extractSyncdPatches:enter', {})
+	const syncNode = getBinaryNodeChild(binaryNode, 'sync')
 	const collectionNodes = getBinaryNodeChildren(syncNode, 'collection')
 
 	const final = {} as {
@@ -351,22 +371,29 @@ export const extractSyncdPatches = async (result: BinaryNode, options: RequestIn
 		})
 	)
 
+	const result = Object.keys(final).length
+	trace('chat-utils', 'extractSyncdPatches:return', { collectionsCount: result })
 	return final
 }
 
 export const downloadExternalBlob = async (blob: proto.IExternalBlobReference, options: RequestInit) => {
+	trace('chat-utils', 'downloadExternalBlob:enter', {})
 	const stream = await downloadContentFromMessage(blob, 'md-app-state', { options })
 	const bufferArray: Buffer[] = []
 	for await (const chunk of stream) {
 		bufferArray.push(chunk)
 	}
 
-	return Buffer.concat(bufferArray)
+	const result = Buffer.concat(bufferArray)
+	trace('chat-utils', 'downloadExternalBlob:return', { length: result.length })
+	return result
 }
 
 export const downloadExternalPatch = async (blob: proto.IExternalBlobReference, options: RequestInit) => {
+	trace('chat-utils', 'downloadExternalPatch:enter', {})
 	const buffer = await downloadExternalBlob(blob, options)
 	const syncData = proto.SyncdMutations.decode(buffer)
+	trace('chat-utils', 'downloadExternalPatch:return', { mutationsCount: syncData.mutations?.length })
 	return syncData
 }
 
@@ -377,6 +404,7 @@ export const decodeSyncdSnapshot = async (
 	minimumVersionNumber: number | undefined,
 	validateMacs = true
 ) => {
+	trace('chat-utils', 'decodeSyncdSnapshot:enter', { name, version: snapshot.version?.version, minimumVersionNumber, validateMacs })
 	const newState = newLTHashState()
 	newState.version = toNumber(snapshot.version!.version)
 
@@ -412,6 +440,7 @@ export const decodeSyncdSnapshot = async (
 		}
 	}
 
+	trace('chat-utils', 'decodeSyncdSnapshot:return', { version: newState.version })
 	return {
 		state: newState,
 		mutationMap
@@ -428,6 +457,7 @@ export const decodePatches = async (
 	logger?: ILogger,
 	validateMacs = true
 ) => {
+	trace('chat-utils', 'decodePatches:enter', { name, patchesCount: syncds.length, minimumVersionNumber, validateMacs })
 	const newState: LTHashState = {
 		...initial,
 		indexValueMap: { ...initial.indexValueMap }
@@ -484,10 +514,12 @@ export const decodePatches = async (
 		syncd.mutations = []
 	}
 
+	trace('chat-utils', 'decodePatches:return', { version: newState.version, mutationsCount: Object.keys(mutationMap).length })
 	return { state: newState, mutationMap }
 }
 
 export const chatModificationToAppPatch = (mod: ChatModification, jid: string) => {
+	trace('chat-utils', 'chatModificationToAppPatch:enter', { jid })
 	const OP = proto.SyncdMutation.SyncdOperation
 	const getMessageRange = (lastMessages: LastMessageList) => {
 		let messageRange: proto.SyncActionValue.ISyncActionMessageRange
@@ -526,6 +558,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 
 	let patch: WAPatchCreate
 	if ('mute' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:mute', { jid })
 		patch = {
 			syncAction: {
 				muteAction: {
@@ -539,6 +572,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('archive' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:archive', { jid, archived: mod.archive })
 		patch = {
 			syncAction: {
 				archiveChatAction: {
@@ -552,6 +586,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('markRead' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:markRead', { jid, read: mod.markRead })
 		patch = {
 			syncAction: {
 				markChatAsReadAction: {
@@ -566,6 +601,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 		}
 	} else if ('deleteForMe' in mod) {
 		const { timestamp, key, deleteMedia } = mod.deleteForMe
+		trace('chat-utils', 'chatModificationToAppPatch:deleteForMe', { jid, messageId: key.id })
 		patch = {
 			syncAction: {
 				deleteMessageForMeAction: {
@@ -579,6 +615,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('clear' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:clear', { jid })
 		patch = {
 			syncAction: {
 				clearChatAction: {
@@ -591,6 +628,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('pin' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:pin', { jid, pinned: mod.pin })
 		patch = {
 			syncAction: {
 				pinAction: {
@@ -603,6 +641,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('contact' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:contact', { jid })
 		patch = {
 			syncAction: {
 				contactAction: mod.contact || {}
@@ -613,6 +652,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: mod.contact ? OP.SET : OP.REMOVE
 		}
 	} else if ('disableLinkPreviews' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:disableLinkPreviews', {})
 		patch = {
 			syncAction: {
 				privacySettingDisableLinkPreviewsAction: mod.disableLinkPreviews || {}
@@ -624,6 +664,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 		}
 	} else if ('star' in mod) {
 		const key = mod.star.messages[0]!
+		trace('chat-utils', 'chatModificationToAppPatch:star', { jid, messageId: key.id, starred: mod.star.star })
 		patch = {
 			syncAction: {
 				starAction: {
@@ -636,6 +677,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('delete' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:delete', { jid })
 		patch = {
 			syncAction: {
 				deleteChatAction: {
@@ -648,6 +690,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('pushNameSetting' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:pushNameSetting', { name: mod.pushNameSetting })
 		patch = {
 			syncAction: {
 				pushNameSetting: {
@@ -660,6 +703,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('quickReply' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:quickReply', { timestamp: mod.quickReply.timestamp })
 		patch = {
 			syncAction: {
 				quickReplyAction: {
@@ -676,6 +720,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('addLabel' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:addLabel', { labelId: mod.addLabel.id })
 		patch = {
 			syncAction: {
 				labelEditAction: {
@@ -691,6 +736,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('addChatLabel' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:addChatLabel', { jid, labelId: mod.addChatLabel.labelId })
 		patch = {
 			syncAction: {
 				labelAssociationAction: {
@@ -703,6 +749,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('removeChatLabel' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:removeChatLabel', { jid, labelId: mod.removeChatLabel.labelId })
 		patch = {
 			syncAction: {
 				labelAssociationAction: {
@@ -715,6 +762,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('addMessageLabel' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:addMessageLabel', { jid, labelId: mod.addMessageLabel.labelId, messageId: mod.addMessageLabel.messageId })
 		patch = {
 			syncAction: {
 				labelAssociationAction: {
@@ -727,6 +775,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 			operation: OP.SET
 		}
 	} else if ('removeMessageLabel' in mod) {
+		trace('chat-utils', 'chatModificationToAppPatch:removeMessageLabel', { jid, labelId: mod.removeMessageLabel.labelId, messageId: mod.removeMessageLabel.messageId })
 		patch = {
 			syncAction: {
 				labelAssociationAction: {
@@ -751,6 +800,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 
 	patch.syncAction.timestamp = Date.now()
 
+	trace('chat-utils', 'chatModificationToAppPatch:return', { type: patch.type, operation: patch.operation })
 	return patch
 }
 
@@ -761,6 +811,7 @@ export const processSyncAction = (
 	initialSyncOpts?: InitialAppStateSyncOptions,
 	logger?: ILogger
 ) => {
+	trace('chat-utils', 'processSyncAction:enter', { isInitialSync: !!initialSyncOpts })
 	const isInitialSync = !!initialSyncOpts
 	const accountSettings = initialSyncOpts?.accountSettings
 
@@ -772,6 +823,7 @@ export const processSyncAction = (
 	} = syncAction
 
 	if (action?.muteAction) {
+		trace('chat-utils', 'processSyncAction:mute', { id })
 		ev.emit('chats.update', [
 			{
 				id,
@@ -780,6 +832,7 @@ export const processSyncAction = (
 			}
 		])
 	} else if (action?.archiveChatAction || type === 'archive' || type === 'unarchive') {
+		trace('chat-utils', 'processSyncAction:archive', { id, type })
 		// okay so we've to do some annoying computation here
 		// when we're initially syncing the app state
 		// there are a few cases we need to handle
@@ -809,6 +862,7 @@ export const processSyncAction = (
 			}
 		])
 	} else if (action?.markChatAsReadAction) {
+		trace('chat-utils', 'processSyncAction:markRead', { id, read: action.markChatAsReadAction.read })
 		const markReadAction = action.markChatAsReadAction
 		// basically we don't need to fire an "read" update if the chat is being marked as read
 		// because the chat is read by default
@@ -823,6 +877,7 @@ export const processSyncAction = (
 			}
 		])
 	} else if (action?.deleteMessageForMeAction || type === 'deleteMessageForMe') {
+		trace('chat-utils', 'processSyncAction:deleteMessageForMe', { id, msgId })
 		ev.emit('messages.delete', {
 			keys: [
 				{
@@ -833,14 +888,17 @@ export const processSyncAction = (
 			]
 		})
 	} else if (action?.contactAction) {
+		trace('chat-utils', 'processSyncAction:contact', { id })
 		const results = processContactAction(action.contactAction, id, logger)
 		emitSyncActionResults(ev, results)
 	} else if (action?.pushNameSetting) {
+		trace('chat-utils', 'processSyncAction:pushName', { name: action?.pushNameSetting?.name })
 		const name = action?.pushNameSetting?.name
 		if (name && me?.name !== name) {
 			ev.emit('creds.update', { me: { ...me, name } })
 		}
 	} else if (action?.pinAction) {
+		trace('chat-utils', 'processSyncAction:pin', { id, pinned: action.pinAction?.pinned })
 		ev.emit('chats.update', [
 			{
 				id,
@@ -849,6 +907,7 @@ export const processSyncAction = (
 			}
 		])
 	} else if (action?.unarchiveChatsSetting) {
+		trace('chat-utils', 'processSyncAction:unarchiveSettings', { unarchiveChats: action.unarchiveChatsSetting.unarchiveChats })
 		const unarchiveChats = !!action.unarchiveChatsSetting.unarchiveChats
 		ev.emit('creds.update', { accountSettings: { unarchiveChats } })
 
@@ -861,6 +920,7 @@ export const processSyncAction = (
 		if (typeof starred !== 'boolean') {
 			starred = syncAction.index[syncAction.index.length - 1] === '1'
 		}
+		trace('chat-utils', 'processSyncAction:star', { id, msgId, starred })
 
 		ev.emit('messages.update', [
 			{
@@ -869,10 +929,12 @@ export const processSyncAction = (
 			}
 		])
 	} else if (action?.deleteChatAction || type === 'deleteChat') {
+		trace('chat-utils', 'processSyncAction:deleteChat', { id })
 		if (!isInitialSync) {
 			ev.emit('chats.delete', [id!])
 		}
 	} else if (action?.labelEditAction) {
+		trace('chat-utils', 'processSyncAction:labelEdit', { id })
 		const { name, color, deleted, predefinedId } = action.labelEditAction
 
 		ev.emit('labels.edit', {
@@ -883,6 +945,7 @@ export const processSyncAction = (
 			predefinedId: predefinedId ? String(predefinedId) : undefined
 		})
 	} else if (action?.labelAssociationAction) {
+		trace('chat-utils', 'processSyncAction:labelAssociation', { type, id })
 		ev.emit('labels.association', {
 			type: action.labelAssociationAction.labeled ? 'add' : 'remove',
 			association:
@@ -900,33 +963,42 @@ export const processSyncAction = (
 						} as MessageLabelAssociation)
 		})
 	} else if (action?.localeSetting?.locale) {
+		trace('chat-utils', 'processSyncAction:locale', { locale: action.localeSetting.locale })
 		ev.emit('settings.update', { setting: 'locale', value: action.localeSetting.locale })
 	} else if (action?.timeFormatAction) {
+		trace('chat-utils', 'processSyncAction:timeFormat', {})
 		ev.emit('settings.update', { setting: 'timeFormat', value: action.timeFormatAction })
 	} else if (action?.pnForLidChatAction) {
+		trace('chat-utils', 'processSyncAction:pnForLid', { id, pnJid: action.pnForLidChatAction.pnJid })
 		if (action.pnForLidChatAction.pnJid) {
 			ev.emit('lid-mapping.update', { lid: id!, pn: action.pnForLidChatAction.pnJid })
 		}
 	} else if (action?.privacySettingRelayAllCalls) {
+		trace('chat-utils', 'processSyncAction:privacyCalls', {})
 		ev.emit('settings.update', {
 			setting: 'privacySettingRelayAllCalls',
 			value: action.privacySettingRelayAllCalls
 		})
 	} else if (action?.statusPrivacy) {
+		trace('chat-utils', 'processSyncAction:statusPrivacy', {})
 		ev.emit('settings.update', { setting: 'statusPrivacy', value: action.statusPrivacy })
 	} else if (action?.lockChatAction) {
+		trace('chat-utils', 'processSyncAction:lockChat', { id, locked: action.lockChatAction.locked })
 		ev.emit('chats.lock', { id: id!, locked: !!action.lockChatAction.locked })
 	} else if (action?.privacySettingDisableLinkPreviewsAction) {
+		trace('chat-utils', 'processSyncAction:disableLinkPreviews', {})
 		ev.emit('settings.update', {
 			setting: 'disableLinkPreviews',
 			value: action.privacySettingDisableLinkPreviewsAction
 		})
 	} else if (action?.notificationActivitySettingAction?.notificationActivitySetting) {
+		trace('chat-utils', 'processSyncAction:notificationActivity', {})
 		ev.emit('settings.update', {
 			setting: 'notificationActivitySetting',
 			value: action.notificationActivitySettingAction.notificationActivitySetting
 		})
 	} else if (action?.lidContactAction) {
+		trace('chat-utils', 'processSyncAction:lidContact', { id })
 		ev.emit('contacts.upsert', [
 			{
 				id: id!,
@@ -940,6 +1012,7 @@ export const processSyncAction = (
 			}
 		])
 	} else if (action?.privacySettingChannelsPersonalisedRecommendationAction) {
+		trace('chat-utils', 'processSyncAction:channelsRecommendation', {})
 		ev.emit('settings.update', {
 			setting: 'channelsPersonalisedRecommendation',
 			value: action.privacySettingChannelsPersonalisedRecommendationAction
@@ -970,4 +1043,5 @@ export const processSyncAction = (
 		const chatLastMsgTimestamp = Number(chat?.lastMessageRecvTimestamp || 0)
 		return lastMsgTimestamp >= chatLastMsgTimestamp
 	}
+	trace('chat-utils', 'processSyncAction:return', {})
 }

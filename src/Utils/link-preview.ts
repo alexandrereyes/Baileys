@@ -2,13 +2,16 @@ import type { WAMediaUploadFunction, WAUrlInfo } from '../Types'
 import type { ILogger } from './logger'
 import { prepareWAMessageMedia } from './messages'
 import { extractImageThumb, getHttpStream } from './messages-media'
+import { trace } from './trace-logger'
 
 const THUMBNAIL_WIDTH_PX = 192
 
 /** Fetches an image and generates a thumbnail for it */
 const getCompressedJpegThumbnail = async (url: string, { thumbnailWidth, fetchOpts }: URLGenerationOptions) => {
+	trace('link-preview', 'getCompressedJpegThumbnail:enter', { url, thumbnailWidth })
 	const stream = await getHttpStream(url, fetchOpts)
 	const result = await extractImageThumb(stream, thumbnailWidth)
+	trace('link-preview', 'getCompressedJpegThumbnail:return', { hasResult: !!result })
 	return result
 }
 
@@ -37,6 +40,7 @@ export const getUrlInfo = async (
 		fetchOpts: { timeout: 3000 }
 	}
 ): Promise<WAUrlInfo | undefined> => {
+	trace('link-preview', 'getUrlInfo:enter', { text, thumbnailWidth: opts.thumbnailWidth })
 	try {
 		// retries
 		const retries = 0
@@ -73,7 +77,7 @@ export const getUrlInfo = async (
 		})
 		if (info && 'title' in info && info.title) {
 			const [image] = info.images
-
+			trace('link-preview', 'getUrlInfo:found', { title: info.title, hasImage: !!image })
 			const urlInfo: WAUrlInfo = {
 				'canonical-url': info.url,
 				'matched-text': text,
@@ -97,13 +101,16 @@ export const getUrlInfo = async (
 				try {
 					urlInfo.jpegThumbnail = image ? (await getCompressedJpegThumbnail(image, opts)).buffer : undefined
 				} catch (error: any) {
+					trace('link-preview', 'getUrlInfo:thumbnailError', { error: error.message })
 					opts.logger?.debug({ err: error.stack, url: previewLink }, 'error in generating thumbnail')
 				}
 			}
 
+			trace('link-preview', 'getUrlInfo:return', { title: info.title })
 			return urlInfo
 		}
 	} catch (error: any) {
+		trace('link-preview', 'getUrlInfo:error', { error: error.message })
 		if (!error.message.includes('receive a valid')) {
 			throw error
 		}

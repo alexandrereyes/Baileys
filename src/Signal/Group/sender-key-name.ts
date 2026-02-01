@@ -4,6 +4,8 @@ interface Sender {
 	toString(): string
 }
 
+import { trace } from '../../Utils/trace-logger'
+
 function isNull(str: string | null): boolean {
 	return str === null || str === ''
 }
@@ -35,6 +37,7 @@ export class SenderKeyName {
 	private readonly sender: Sender
 
 	constructor(groupId: string, sender: Sender) {
+		trace('sender-key-name', 'SenderKeyName.constructor', { groupId, senderId: sender.id, deviceId: sender.deviceId })
 		this.groupId = groupId
 		this.sender = sender
 	}

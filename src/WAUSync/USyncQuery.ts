@@ -1,5 +1,6 @@
 import type { USyncQueryProtocol } from '../Types/USync'
 import { type BinaryNode, getBinaryNodeChild } from '../WABinary'
+import { trace } from '../Utils/trace-logger'
 import { USyncBotProfileProtocol } from './Protocols/UsyncBotProfileProtocol'
 import { USyncLIDProtocol } from './Protocols/UsyncLIDProtocol'
 import {
@@ -24,6 +25,7 @@ export class USyncQuery {
 	mode: string
 
 	constructor() {
+		trace('USyncQuery', 'constructor', {})
 		this.protocols = []
 		this.users = []
 		this.context = 'interactive'
@@ -31,22 +33,27 @@ export class USyncQuery {
 	}
 
 	withMode(mode: string) {
+		trace('USyncQuery', 'withMode', { mode })
 		this.mode = mode
 		return this
 	}
 
 	withContext(context: string) {
+		trace('USyncQuery', 'withContext', { context })
 		this.context = context
 		return this
 	}
 
 	withUser(user: USyncUser) {
+		trace('USyncQuery', 'withUser', { userId: user.id, userLid: user.lid })
 		this.users.push(user)
 		return this
 	}
 
 	parseUSyncQueryResult(result: BinaryNode | undefined): USyncQueryResult | undefined {
+		trace('USyncQuery', 'parseUSyncQueryResult:enter', { resultType: result?.attrs?.type })
 		if (!result || result.attrs.type !== 'result') {
+			trace('USyncQuery', 'parseUSyncQueryResult:early-return', { reason: 'invalid_result' })
 			return
 		}
 
@@ -98,35 +105,42 @@ export class USyncQuery {
 
 		//TODO: implement side list
 		//const sideListNode = getBinaryNodeChild(usyncNode, 'side_list')
+		trace('USyncQuery', 'parseUSyncQueryResult:return', { listCount: queryResult.list.length })
 		return queryResult
 	}
 
 	withDeviceProtocol() {
+		trace('USyncQuery', 'withDeviceProtocol', {})
 		this.protocols.push(new USyncDeviceProtocol())
 		return this
 	}
 
 	withContactProtocol() {
+		trace('USyncQuery', 'withContactProtocol', {})
 		this.protocols.push(new USyncContactProtocol())
 		return this
 	}
 
 	withStatusProtocol() {
+		trace('USyncQuery', 'withStatusProtocol', {})
 		this.protocols.push(new USyncStatusProtocol())
 		return this
 	}
 
 	withDisappearingModeProtocol() {
+		trace('USyncQuery', 'withDisappearingModeProtocol', {})
 		this.protocols.push(new USyncDisappearingModeProtocol())
 		return this
 	}
 
 	withBotProfileProtocol() {
+		trace('USyncQuery', 'withBotProfileProtocol', {})
 		this.protocols.push(new USyncBotProfileProtocol())
 		return this
 	}
 
 	withLIDProtocol() {
+		trace('USyncQuery', 'withLIDProtocol', {})
 		this.protocols.push(new USyncLIDProtocol())
 		return this
 	}

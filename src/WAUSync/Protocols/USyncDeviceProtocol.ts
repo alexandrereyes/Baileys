@@ -1,5 +1,6 @@
 import type { USyncQueryProtocol } from '../../Types/USync'
 import { assertNodeErrorFree, type BinaryNode, getBinaryNodeChild } from '../../WABinary'
+import { trace } from '../../Utils/trace-logger'
 //import { USyncUser } from '../USyncUser'
 
 export type KeyIndexData = {
@@ -23,6 +24,7 @@ export class USyncDeviceProtocol implements USyncQueryProtocol {
 	name = 'devices'
 
 	getQueryElement(): BinaryNode {
+		trace('USyncDeviceProtocol', 'getQueryElement', { version: '2' })
 		return {
 			tag: 'devices',
 			attrs: {
@@ -32,6 +34,7 @@ export class USyncDeviceProtocol implements USyncQueryProtocol {
 	}
 
 	getUserElement(/* user: USyncUser */): BinaryNode | null {
+		trace('USyncDeviceProtocol', 'getUserElement', {})
 		//TODO: Implement device phashing, ts and expectedTs
 		//TODO: if all are not present, return null <- current behavior
 		//TODO: otherwise return a node w tag 'devices' w those as attrs
@@ -39,6 +42,7 @@ export class USyncDeviceProtocol implements USyncQueryProtocol {
 	}
 
 	parser(node: BinaryNode): ParsedDeviceInfo {
+		trace('USyncDeviceProtocol', 'parser:enter', { tag: node.tag })
 		const deviceList: DeviceListData[] = []
 		let keyIndex: KeyIndexData | undefined = undefined
 
@@ -70,9 +74,11 @@ export class USyncDeviceProtocol implements USyncQueryProtocol {
 			}
 		}
 
-		return {
+		const result = {
 			deviceList,
 			keyIndex
 		}
+		trace('USyncDeviceProtocol', 'parser:return', { deviceListCount: deviceList.length, hasKeyIndex: !!keyIndex })
+		return result
 	}
 }

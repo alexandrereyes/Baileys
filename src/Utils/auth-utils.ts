@@ -17,6 +17,7 @@ import { Curve, signedKeyPair } from './crypto'
 import { delay, generateRegistrationId } from './generics'
 import type { ILogger } from './logger'
 import { PreKeyManager } from './pre-key-manager'
+import { trace } from './trace-logger'
 
 /**
  * Transaction context stored in AsyncLocalStorage
@@ -38,6 +39,7 @@ export function makeCacheableSignalKeyStore(
 	logger?: ILogger,
 	_cache?: CacheStore
 ): SignalKeyStore {
+	trace('auth-utils', 'makeCacheableSignalKeyStore:enter', { hasCache: !!_cache })
 	const cache =
 		_cache ||
 		new NodeCache<SignalDataTypeMap[keyof SignalDataTypeMap]>({
@@ -53,8 +55,10 @@ export function makeCacheableSignalKeyStore(
 		return `${type}.${id}`
 	}
 
+	trace('auth-utils', 'makeCacheableSignalKeyStore:return', {})
 	return {
 		async get(type, ids) {
+			trace('auth-utils', 'makeCacheableSignalKeyStore.get:enter', { type, idsCount: ids.length })
 			return cacheMutex.runExclusive(async () => {
 				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
 				const idsToFetch: string[] = []
@@ -81,10 +85,12 @@ export function makeCacheableSignalKeyStore(
 					}
 				}
 
+				trace('auth-utils', 'makeCacheableSignalKeyStore.get:return', { cachedCount: Object.keys(data).length, fetchedCount: idsToFetch.length })
 				return data
 			})
 		},
 		async set(data) {
+			trace('auth-utils', 'makeCacheableSignalKeyStore.set:enter', { types: Object.keys(data) })
 			return cacheMutex.runExclusive(async () => {
 				let keys = 0
 				for (const type in data) {
@@ -96,11 +102,14 @@ export function makeCacheableSignalKeyStore(
 
 				logger?.trace({ keys }, 'updated cache')
 				await store.set(data)
+				trace('auth-utils', 'makeCacheableSignalKeyStore.set:return', { keys })
 			})
 		},
 		async clear() {
+			trace('auth-utils', 'makeCacheableSignalKeyStore.clear:enter', {})
 			await cache.flushAll()
 			await store.clear?.()
+			trace('auth-utils', 'makeCacheableSignalKeyStore.clear:return', {})
 		}
 	}
 }
@@ -117,6 +126,7 @@ export const addTransactionCapability = (
 	logger: ILogger,
 	{ maxCommitRetries, delayBetweenTriesMs }: TransactionCapabilityOptions
 ): SignalKeyStoreWithTransaction => {
+	trace('auth-utils', 'addTransactionCapability:enter', { maxCommitRetries, delayBetweenTriesMs })
 	const txStorage = new AsyncLocalStorage<TransactionContext>()
 
 	// Queues for concurrency control (keyed by signal data type - bounded set)
@@ -188,6 +198,7 @@ export const addTransactionCapability = (
 	 * Commit transaction with retries
 	 */
 	async function commitWithRetry(mutations: SignalDataSet): Promise<void> {
+		trace('auth-utils', 'commitWithRetry:enter', { mutationCount: Object.keys(mutations).length })
 		if (Object.keys(mutations).length === 0) {
 			logger.trace('no mutations in transaction')
 			return
@@ -199,10 +210,12 @@ export const addTransactionCapability = (
 			try {
 				await state.set(mutations)
 				logger.trace({ mutationCount: Object.keys(mutations).length }, 'committed transaction')
+				trace('auth-utils', 'commitWithRetry:return', { success: true, attempt })
 				return
 			} catch (error) {
 				const retriesLeft = maxCommitRetries - attempt - 1
 				logger.warn(`failed to commit mutations, retries left=${retriesLeft}`)
+				trace('auth-utils', 'commitWithRetry:error', { error: (error as Error).message, attempt, retriesLeft })
 
 				if (retriesLeft === 0) {
 					throw error
@@ -213,11 +226,14 @@ export const addTransactionCapability = (
 		}
 	}
 
+	trace('auth-utils', 'addTransactionCapability:return', {})
 	return {
 		get: async (type, ids) => {
+			trace('auth-utils', 'addTransactionCapability.get:enter', { type, idsCount: ids.length })
 			const ctx = txStorage.getStore()
 
 			if (!ctx) {
+				trace('auth-utils', 'addTransactionCapability.get:return', { inTransaction: false })
 				// No transaction - direct read without exclusive lock for concurrency
 				return state.get(type, ids)
 			}
@@ -246,10 +262,12 @@ export const addTransactionCapability = (
 				}
 			}
 
+			trace('auth-utils', 'addTransactionCapability.get:return', { inTransaction: true, resultCount: Object.keys(result).length, dbQueries: ctx.dbQueries })
 			return result
 		},
 
 		set: async data => {
+			trace('auth-utils', 'addTransactionCapability.set:enter', { types: Object.keys(data) })
 			const ctx = txStorage.getStore()
 
 			if (!ctx) {
@@ -273,6 +291,7 @@ export const addTransactionCapability = (
 						})
 					)
 				)
+				trace('auth-utils', 'addTransactionCapability.set:return', { inTransaction: false })
 				return
 			}
 
@@ -295,16 +314,20 @@ export const addTransactionCapability = (
 					Object.assign(ctx.mutations[key]!, data[key])
 				}
 			}
+
+			trace('auth-utils', 'addTransactionCapability.set:return', { inTransaction: true })
 		},
 
 		isInTransaction,
 
 		transaction: async (work, key) => {
+			trace('auth-utils', 'addTransactionCapability.transaction:enter', { key })
 			const existing = txStorage.getStore()
 
 			// Nested transaction - reuse existing context
 			if (existing) {
 				logger.trace('reusing existing transaction context')
+				trace('auth-utils', 'addTransactionCapability.transaction:return', { nested: true })
 				return work()
 			}
 
@@ -329,10 +352,12 @@ export const addTransactionCapability = (
 						await commitWithRetry(ctx.mutations)
 
 						logger.trace({ dbQueries: ctx.dbQueries }, 'transaction completed')
+						trace('auth-utils', 'addTransactionCapability.transaction:return', { success: true, dbQueries: ctx.dbQueries })
 
 						return result
 					} catch (error) {
 						logger.error({ error }, 'transaction failed, rolling back')
+						trace('auth-utils', 'addTransactionCapability.transaction:error', { error: (error as Error).message })
 						throw error
 					}
 				})
@@ -344,8 +369,9 @@ export const addTransactionCapability = (
 }
 
 export const initAuthCreds = (): AuthenticationCreds => {
+	trace('auth-utils', 'initAuthCreds:enter', {})
 	const identityKey = Curve.generateKeyPair()
-	return {
+	const result = {
 		noiseKey: Curve.generateKeyPair(),
 		pairingEphemeralKeyPair: Curve.generateKeyPair(),
 		signedIdentityKey: identityKey,
@@ -365,4 +391,6 @@ export const initAuthCreds = (): AuthenticationCreds => {
 		routingInfo: undefined,
 		additionalData: undefined
 	}
+	trace('auth-utils', 'initAuthCreds:return', { registrationId: result.registrationId, nextPreKeyId: result.nextPreKeyId })
+	return result
 }

@@ -5,6 +5,7 @@ import { proto } from '../../WAProto/index.js'
 import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '../Types'
 import { initAuthCreds } from './auth-utils'
 import { BufferJSON } from './generics'
+import { trace } from './trace-logger'
 
 // We need to lock files due to the fact that we are using async functions to read and write files
 // https://github.com/WhiskeySockets/Baileys/issues/794
@@ -33,6 +34,7 @@ const getFileLock = (path: string): Mutex => {
 export const useMultiFileAuthState = async (
 	folder: string
 ): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> => {
+	trace('use-multi-file-auth-state', 'useMultiFileAuthState:enter', { folder })
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const writeData = async (data: any, file: string) => {
 		const filePath = join(folder, fixFileName(file)!)
@@ -70,7 +72,7 @@ export const useMultiFileAuthState = async (
 			const filePath = join(folder, fixFileName(file)!)
 			const mutex = getFileLock(filePath)
 
-			return mutex.acquire().then(async release => {
+			return await mutex.acquire().then(async release => {
 				try {
 					await unlink(filePath)
 				} catch {
@@ -96,14 +98,15 @@ export const useMultiFileAuthState = async (
 
 	const creds: AuthenticationCreds = (await readData('creds.json')) || initAuthCreds()
 
-	return {
+	const result = {
 		state: {
 			creds,
 			keys: {
-				get: async (type, ids) => {
-					const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
+				get: async (type: any, ids: any) => {
+					trace('use-multi-file-auth-state', 'keys:get:enter', { type, idsCount: ids.length })
+					const data: { [_: string]: any } = {}
 					await Promise.all(
-						ids.map(async id => {
+						ids.map(async (id: any) => {
 							let value = await readData(`${type}-${id}.json`)
 							if (type === 'app-state-sync-key' && value) {
 								value = proto.Message.AppStateSyncKeyData.fromObject(value)
@@ -112,10 +115,11 @@ export const useMultiFileAuthState = async (
 							data[id] = value
 						})
 					)
-
+					trace('use-multi-file-auth-state', 'keys:get:return', { resultCount: Object.keys(data).length })
 					return data
 				},
-				set: async data => {
+				set: async (data: any) => {
+					trace('use-multi-file-auth-state', 'keys:set:enter', {})
 					const tasks: Promise<void>[] = []
 					for (const category in data) {
 						for (const id in data[category as keyof SignalDataTypeMap]) {
@@ -126,11 +130,17 @@ export const useMultiFileAuthState = async (
 					}
 
 					await Promise.all(tasks)
+					trace('use-multi-file-auth-state', 'keys:set:return', { tasksCount: tasks.length })
 				}
 			}
 		},
 		saveCreds: async () => {
-			return writeData(creds, 'creds.json')
+			trace('use-multi-file-auth-state', 'saveCreds:enter', {})
+			const result = await writeData(creds, 'creds.json')
+			trace('use-multi-file-auth-state', 'saveCreds:return', {})
+			return result
 		}
 	}
+	trace('use-multi-file-auth-state', 'useMultiFileAuthState:return', {})
+	return result
 }

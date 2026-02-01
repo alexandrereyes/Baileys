@@ -17,19 +17,24 @@ import type {
 import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildString } from '../WABinary'
 import { generateMessageIDV2 } from './generics'
 import { getStream, getUrlFromDirectPath } from './messages-media'
+import { trace } from './trace-logger'
 
 export const parseCatalogNode = (node: BinaryNode) => {
+	trace('business', 'parseCatalogNode:enter', {})
 	const catalogNode = getBinaryNodeChild(node, 'product_catalog')
 	const products = getBinaryNodeChildren(catalogNode, 'product').map(parseProductNode)
 	const paging = getBinaryNodeChild(catalogNode, 'paging')
 
-	return {
+	const result = {
 		products,
 		nextPageCursor: paging ? getBinaryNodeChildString(paging, 'after') : undefined
 	}
+	trace('business', 'parseCatalogNode:return', { productsCount: products.length, hasNextPage: !!paging })
+	return result
 }
 
 export const parseCollectionsNode = (node: BinaryNode) => {
+	trace('business', 'parseCollectionsNode:enter', {})
 	const collectionsNode = getBinaryNodeChild(node, 'collections')
 	const collections = getBinaryNodeChildren(collectionsNode, 'collection').map<CatalogCollection>(collectionNode => {
 		const id = getBinaryNodeChildString(collectionNode, 'id')!
@@ -44,12 +49,13 @@ export const parseCollectionsNode = (node: BinaryNode) => {
 		}
 	})
 
-	return {
-		collections
-	}
+	const result = { collections }
+	trace('business', 'parseCollectionsNode:return', { collectionsCount: collections.length })
+	return result
 }
 
 export const parseOrderDetailsNode = (node: BinaryNode) => {
+	trace('business', 'parseOrderDetailsNode:enter', {})
 	const orderNode = getBinaryNodeChild(node, 'order')
 	const products = getBinaryNodeChildren(orderNode, 'product').map<OrderProduct>(productNode => {
 		const imageNode = getBinaryNodeChild(productNode, 'image')!
@@ -73,10 +79,12 @@ export const parseOrderDetailsNode = (node: BinaryNode) => {
 		products
 	}
 
+	trace('business', 'parseOrderDetailsNode:return', { productsCount: products.length })
 	return orderDetails
 }
 
 export const toProductNode = (productId: string | undefined, product: ProductCreate | ProductUpdate) => {
+	trace('business', 'toProductNode:enter', { productId, product })
 	const attrs: BinaryNode['attrs'] = {}
 	const content: BinaryNode[] = []
 
@@ -216,12 +224,14 @@ export async function uploadingNecessaryImagesOfProduct<T extends ProductUpdate 
 	waUploadToServer: WAMediaUploadFunction,
 	timeoutMs = 30_000
 ) {
+	trace('business', 'uploadingNecessaryImagesOfProduct:enter', { imagesCount: product.images?.length, timeoutMs })
 	product = {
 		...product,
 		images: product.images
 			? await uploadingNecessaryImages(product.images, waUploadToServer, timeoutMs)
 			: product.images
 	}
+	trace('business', 'uploadingNecessaryImagesOfProduct:return', {})
 	return product
 }
 
@@ -233,6 +243,7 @@ export const uploadingNecessaryImages = async (
 	waUploadToServer: WAMediaUploadFunction,
 	timeoutMs = 30_000
 ) => {
+	trace('business', 'uploadingNecessaryImages:enter', { imagesCount: images.length, timeoutMs })
 	const results = await Promise.all(
 		images.map<Promise<{ url: string }>>(async img => {
 			if ('url' in img) {
@@ -266,6 +277,7 @@ export const uploadingNecessaryImages = async (
 			return { url: getUrlFromDirectPath(directPath) }
 		})
 	)
+	trace('business', 'uploadingNecessaryImages:return', { uploadedCount: results.length })
 	return results
 }
 

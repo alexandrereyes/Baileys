@@ -24,6 +24,7 @@ import {
 import type { DeviceListData, ParsedDeviceInfo, USyncQueryResultList } from '../WAUSync'
 import { Curve, generateSignalPubKey } from './crypto'
 import { encodeBigEndian } from './generics'
+import { trace } from './trace-logger'
 
 function chunk<T>(array: T[], size: number): T[][] {
 	const chunks: T[][] = []
@@ -35,22 +36,29 @@ function chunk<T>(array: T[], size: number): T[][] {
 }
 
 export const createSignalIdentity = (wid: string, accountSignatureKey: Uint8Array): SignalIdentity => {
-	return {
+	trace('signal', 'createSignalIdentity:enter', { wid, accountSignatureKeyLen: accountSignatureKey.length })
+	const result = {
 		identifier: { name: wid, deviceId: 0 },
 		identifierKey: generateSignalPubKey(accountSignatureKey)
 	}
+	trace('signal', 'createSignalIdentity:return', { identifierKeyLen: result.identifierKey.length })
+	return result
 }
 
 export const getPreKeys = async ({ get }: SignalKeyStore, min: number, limit: number) => {
+	trace('signal', 'getPreKeys:enter', { min, limit })
 	const idList: string[] = []
 	for (let id = min; id < limit; id++) {
 		idList.push(id.toString())
 	}
 
-	return get('pre-key', idList)
+	const result = await get('pre-key', idList)
+	trace('signal', 'getPreKeys:return', { count: Object.keys(result).length })
+	return result
 }
 
 export const generateOrGetPreKeys = (creds: AuthenticationCreds, range: number) => {
+	trace('signal', 'generateOrGetPreKeys:enter', { nextPreKeyId: creds.nextPreKeyId, firstUnuploaded: creds.firstUnuploadedPreKeyId, range })
 	const avaliable = creds.nextPreKeyId - creds.firstUnuploadedPreKeyId
 	const remaining = range - avaliable
 	const lastPreKeyId = creds.nextPreKeyId + remaining - 1
@@ -61,6 +69,7 @@ export const generateOrGetPreKeys = (creds: AuthenticationCreds, range: number) 
 		}
 	}
 
+	trace('signal', 'generateOrGetPreKeys:return', { count: Object.keys(newPreKeys).length, lastPreKeyId })
 	return {
 		newPreKeys,
 		lastPreKeyId,
@@ -68,7 +77,9 @@ export const generateOrGetPreKeys = (creds: AuthenticationCreds, range: number) 
 	}
 }
 
-export const xmppSignedPreKey = (key: SignedKeyPair): BinaryNode => ({
+export const xmppSignedPreKey = (key: SignedKeyPair): BinaryNode => {
+	trace('signal', 'xmppSignedPreKey:enter', { keyId: key.keyId })
+	const result = ({
 	tag: 'skey',
 	attrs: {},
 	content: [
@@ -76,18 +87,27 @@ export const xmppSignedPreKey = (key: SignedKeyPair): BinaryNode => ({
 		{ tag: 'value', attrs: {}, content: key.keyPair.public },
 		{ tag: 'signature', attrs: {}, content: key.signature }
 	]
-})
+	})
+	trace('signal', 'xmppSignedPreKey:return', {})
+	return result
+}
 
-export const xmppPreKey = (pair: KeyPair, id: number): BinaryNode => ({
+export const xmppPreKey = (pair: KeyPair, id: number): BinaryNode => {
+	trace('signal', 'xmppPreKey:enter', { id })
+	const result = ({
 	tag: 'key',
 	attrs: {},
 	content: [
 		{ tag: 'id', attrs: {}, content: encodeBigEndian(id, 3) },
 		{ tag: 'value', attrs: {}, content: pair.public }
 	]
-})
+	})
+	trace('signal', 'xmppPreKey:return', {})
+	return result
+}
 
 export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: SignalRepositoryWithLIDStore) => {
+	trace('signal', 'parseAndInjectE2ESessions:enter', {})
 	const extractKey = (key: BinaryNode) =>
 		key
 			? {
@@ -129,6 +149,7 @@ export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: Si
 			})
 		}
 	}
+	trace('signal', 'parseAndInjectE2ESessions:return', {})
 }
 
 export const extractDeviceJids = (
@@ -137,6 +158,7 @@ export const extractDeviceJids = (
 	myLid: string,
 	excludeZeroDevices: boolean
 ) => {
+	trace('signal', 'extractDeviceJids:enter', { resultCount: result.length, myJid, myLid, excludeZeroDevices })
 	const { user: myUser, device: myDevice } = jidDecode(myJid)!
 
 	const extracted: FullJid[] = []
@@ -168,6 +190,7 @@ export const extractDeviceJids = (
 		}
 	}
 
+	trace('signal', 'extractDeviceJids:return', { extractedCount: extracted.length })
 	return extracted
 }
 
@@ -176,6 +199,7 @@ export const extractDeviceJids = (
  * @param count number of pre-keys to get or generate
  */
 export const getNextPreKeys = async ({ creds, keys }: AuthenticationState, count: number) => {
+	trace('signal', 'getNextPreKeys:enter', { count })
 	const { newPreKeys, lastPreKeyId, preKeysRange } = generateOrGetPreKeys(creds, count)
 
 	const update: Partial<AuthenticationCreds> = {
@@ -187,10 +211,12 @@ export const getNextPreKeys = async ({ creds, keys }: AuthenticationState, count
 
 	const preKeys = await getPreKeys(keys, preKeysRange[0], preKeysRange[0] + preKeysRange[1])
 
+	trace('signal', 'getNextPreKeys:return', { generated: Object.keys(newPreKeys).length, total: Object.keys(preKeys).length })
 	return { update, preKeys }
 }
 
 export const getNextPreKeysNode = async (state: AuthenticationState, count: number) => {
+	trace('signal', 'getNextPreKeysNode:enter', { count })
 	const { creds } = state
 	const { update, preKeys } = await getNextPreKeys(state, count)
 
@@ -210,5 +236,6 @@ export const getNextPreKeysNode = async (state: AuthenticationState, count: numb
 		]
 	}
 
+	trace('signal', 'getNextPreKeysNode:return', { preKeysCount: Object.keys(preKeys).length })
 	return { update, node }
 }

@@ -3,6 +3,7 @@ import { proto } from '../../WAProto/index.js'
 import type { WAMessageContent, WAMessageKey } from '../Types'
 import type { BinaryNode } from '../WABinary'
 import { hkdf } from './crypto'
+import { trace } from './trace-logger'
 
 export type ReportingField = {
 	f: number
@@ -109,6 +110,7 @@ const generateMsgSecretKey = async (
 	modificationSender: string,
 	origMsgSecret: Uint8Array
 ) => {
+	trace('reporting-utils', 'generateMsgSecretKey:enter', { modificationType, origMsgId })
 	const useCaseSecret = Buffer.concat([
 		Buffer.from(origMsgId, 'utf8'),
 		Buffer.from(origMsgSender, 'utf8'),
@@ -116,12 +118,15 @@ const generateMsgSecretKey = async (
 		Buffer.from(modificationType, 'utf8')
 	])
 
-	return hkdf(origMsgSecret, 32, { info: useCaseSecret.toString('latin1') })
+	const result = await hkdf(origMsgSecret, 32, { info: useCaseSecret.toString('latin1') })
+	trace('reporting-utils', 'generateMsgSecretKey:return', { keyLength: result.length })
+	return result
 }
 
 type FieldBytes = { num: number; bytes: Buffer }
 
 const extractReportingTokenContent = (data: Buffer, cfg: Map<number, CompiledReportingField>): Buffer | null => {
+	trace('reporting-utils', 'extractReportingTokenContent:enter', { dataLength: data.length })
 	const out: FieldBytes[] = []
 	let i = 0
 
@@ -266,7 +271,9 @@ const extractReportingTokenContent = (data: Buffer, cfg: Map<number, CompiledRep
 	}
 
 	out.sort((a, b) => a.num - b.num)
-	return Buffer.concat(out.map(f => f.bytes))
+	const result = Buffer.concat(out.map(f => f.bytes))
+	trace('reporting-utils', 'extractReportingTokenContent:return', { resultLength: result.length })
+	return result
 }
 
 type Varint = { value: number; bytes: number; ok: boolean }
@@ -313,8 +320,10 @@ export const getMessageReportingToken = async (
 	message: WAMessageContent,
 	key: WAMessageKey
 ): Promise<BinaryNode | null> => {
+	trace('reporting-utils', 'getMessageReportingToken:enter', { messageId: key.id })
 	const msgSecret = message.messageContextInfo?.messageSecret
 	if (!msgSecret || !key.id) {
+		trace('reporting-utils', 'getMessageReportingToken:return', { hasToken: false, reason: 'no secret or id' })
 		return null
 	}
 
@@ -325,12 +334,13 @@ export const getMessageReportingToken = async (
 
 	const content = extractReportingTokenContent(msgProtobuf, compiledReportingFields)
 	if (!content || content.length === 0) {
+		trace('reporting-utils', 'getMessageReportingToken:return', { hasToken: false, reason: 'empty content' })
 		return null
 	}
 
 	const reportingToken = createHmac('sha256', reportingSecret).update(content).digest().subarray(0, 16)
 
-	return {
+	const result = {
 		tag: 'reporting',
 		attrs: {},
 		content: [
@@ -341,4 +351,6 @@ export const getMessageReportingToken = async (
 			}
 		]
 	}
+	trace('reporting-utils', 'getMessageReportingToken:return', { hasToken: true })
+	return result
 }
