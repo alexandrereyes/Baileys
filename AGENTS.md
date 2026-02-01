@@ -14,28 +14,39 @@ Este é um **fork instrumentado** do [Baileys](https://github.com/WhiskeySockets
 
 ## Política de Merge com Upstream
 
-### Regra principal: upstream sempre tem prioridade
+### Regra principal: o fork deve ser IDÊNTICO ao upstream + traces
 
-Ao fazer merge do upstream, a lógica do Baileys **sempre prevalece**. A única adição que deve ser preservada é a instrumentação de trace.
+O `git diff upstream/master` deste fork deve conter **exclusivamente**:
+
+1. `import { trace } from './trace-logger'` (ou path equivalente)
+2. Chamadas `trace(...)` inseridas nas funções
+3. **Mudanças estritamente necessárias** para inserir traces:
+   - Variáveis intermediárias antes de `return` (para logar o valor retornado)
+   - Blocos `{}` em early-returns de uma linha (para inserir trace antes do return)
+   - Type assertions (`as Buffer`) quando o TS exigir para compilar com a refatoração
+   - Contadores (`frameCount++`) usados exclusivamente em traces
+
+**PROIBIDO** qualquer outra alteração, incluindo:
+- Mudar formatação/indentação do código upstream
+- Mudar destructuring (ex: multi-line → single-line)
+- Adicionar type annotations que o upstream não tem
+- Renomear variáveis ou funções
+- Mudar `sock.method()` para `method()` via destructuring adicional
+- Qualquer "melhoria" ou "correção" que o upstream não tenha
+
+**Na dúvida**: se a mudança não é um `trace()` call nem é estritamente necessária para inserir um, ela NÃO deve existir.
 
 ### Como fazer merge com upstream
 
 ```bash
-# Adicionar upstream como remote (se ainda não tiver)
-git remote add upstream https://github.com/WhiskeySockets/Baileys.git
-
-# Buscar últimas mudanças
 git fetch upstream
-
-# Merge na branch de instrumentação
-git checkout feat/instrumentation
-git merge upstream/master -m "Merge upstream: <resumo das mudanças>"
+git merge upstream/master -m "Sync upstream: <resumo das mudanças>"
 
 # Resolver conflitos:
 # - Em imports: manter AMBOS (upstream + trace import)
-# - Em lógica: SEMPRE usar a versão upstream
+# - Em lógica: SEMPRE usar a versão upstream, sem exceção
 # - Em trace() calls: RE-ADICIONAR nos locais corretos da nova lógica
-# - Se upstream adicionou funções novas: ADICIONAR traces nelas também
+# - Se upstream adicionou funções novas: ADICIONAR traces nelas
 ```
 
 ### Checklist pós-merge
@@ -44,7 +55,8 @@ git merge upstream/master -m "Merge upstream: <resumo das mudanças>"
 2. Verificar que funções novas do upstream receberam traces
 3. Rodar `npx tsc --noEmit` para confirmar zero erros
 4. Se funções mudaram de nome/assinatura, atualizar os trace points
-5. Atualizar o port C# com as mudanças de lógica correspondentes
+5. **Rodar `git diff upstream/master` e revisar**: toda linha `-`/`+` que não seja trace é um bug
+6. **Sincronizar traces com o port C#**: todo trace novo no fork deve ser adicionado ao C# correspondente (e vice-versa)
 
 ---
 
@@ -113,6 +125,22 @@ Formato idêntico ao `TraceLogger.cs` do port C# (`/tmp/csharp_trace.log`).
 3. Se upstream **renomeou funções**: atualizar o nome no trace
 4. Se upstream **mudou a assinatura**: atualizar os args logados no trace
 5. **NUNCA** remover o import do `trace-logger` de nenhum arquivo
+
+### Sincronização bidirecional com C#
+
+Os traces deste fork e do port C# devem estar **sempre em sincronia** para que a comparação por `grep` funcione:
+
+- **Mesmo módulo**: `trace('noise-handler', ...)` aqui → `TraceLogger.Trace("noise-handler", ...)` no C#
+- **Mesmo nome de trace point**: `'encrypt:enter'` aqui → `"encrypt:enter"` no C#
+- **Mesma convenção**: `function:enter`, `function:return`, `function:error`
+
+**Ao adicionar/modificar traces no fork**:
+1. Adicionar/modificar o trace correspondente no port C#
+2. Se a função não existe no C# ainda, documentar no commit que o trace existe mas a função não foi portada
+
+**Ao adicionar/modificar traces no C#**:
+1. Verificar que o trace correspondente existe no fork
+2. Se não existe, adicionar ao fork
 
 ### Ao adicionar traces novos
 
