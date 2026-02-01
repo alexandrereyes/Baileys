@@ -142,9 +142,18 @@ trace('module-name', 'functionName:return', { resultSummary })
 
 ---
 
-## Estrutura de Branches
+## Estratégia de Branch
 
-| Branch | Propósito |
-|--------|-----------|
-| `master` | Em sync com upstream (sem instrumentação) |
-| `feat/instrumentation` | Branch principal com todos os traces |
+Branch única: **`master`**. Contém o código upstream + instrumentação de trace.
+
+Ao sincronizar com upstream:
+
+```bash
+git fetch upstream
+git merge upstream/master -m "Sync upstream: <resumo das mudanças do upstream>"
+# Resolver conflitos preservando traces
+# Instrumentar funções novas do upstream
+npx tsc --noEmit  # confirmar zero erros
+```
+
+A lógica upstream **sempre prevalece**. Traces são a única adição deste fork.
