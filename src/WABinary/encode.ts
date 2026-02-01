@@ -1,3 +1,4 @@
+import { trace } from '../Utils/trace-logger'
 import * as constants from './constants'
 import { type FullJid, jidDecode } from './jid-utils'
 import type { BinaryNode, BinaryNodeCodingOptions } from './types'
@@ -7,7 +8,9 @@ export const encodeBinaryNode = (
 	opts: Pick<BinaryNodeCodingOptions, 'TAGS' | 'TOKEN_MAP'> = constants,
 	buffer: number[] = [0]
 ): Buffer => {
+	trace('wa-binary-encode', 'encodeBinaryNode:enter', { tag: node.tag, attrsCount: Object.keys(node.attrs || {}).length })
 	const encoded = encodeBinaryNodeInner(node, opts, buffer)
+	trace('wa-binary-encode', 'encodeBinaryNode:return', { encodedSize: encoded.length })
 	return Buffer.from(encoded)
 }
 
@@ -16,6 +19,7 @@ const encodeBinaryNodeInner = (
 	opts: Pick<BinaryNodeCodingOptions, 'TAGS' | 'TOKEN_MAP'>,
 	buffer: number[]
 ): number[] => {
+	trace('wa-binary-encode', 'encodeBinaryNodeInner:enter', { tag, attrsCount: Object.keys(attrs || {}).length })
 	const { TAGS, TOKEN_MAP } = opts
 
 	const pushByte = (value: number) => buffer.push(value & 0xff)
@@ -254,5 +258,6 @@ const encodeBinaryNodeInner = (
 		throw new Error(`invalid children for header "${tag}": ${content} (${typeof content})`)
 	}
 
+	trace('wa-binary-encode', 'encodeBinaryNodeInner:return', { tag, attrsCount: validAttributes.length, hasContent: typeof content !== 'undefined' })
 	return buffer
 }

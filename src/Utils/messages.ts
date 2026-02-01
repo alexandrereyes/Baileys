@@ -1,3 +1,4 @@
+import { trace } from './trace-logger'
 import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 import { promises as fs } from 'fs'
@@ -87,17 +88,24 @@ const MessageTypeProto = {
  * @param text eg. hello https://google.com
  * @returns the URL, eg. https://google.com
  */
-export const extractUrlFromText = (text: string) => text.match(URL_REGEX)?.[0]
+export const extractUrlFromText = (text: string) => {
+	trace('messages', 'extractUrlFromText:enter', { textLength: text.length })
+	const result = text.match(URL_REGEX)?.[0]
+	trace('messages', 'extractUrlFromText:return', { hasUrl: !!result })
+	return result
+}
 
 export const generateLinkPreviewIfRequired = async (
 	text: string,
 	getUrlInfo: MessageGenerationOptions['getUrlInfo'],
 	logger: MessageGenerationOptions['logger']
 ) => {
+	trace('messages', 'generateLinkPreviewIfRequired:enter', { hasGetUrlInfo: !!getUrlInfo })
 	const url = extractUrlFromText(text)
 	if (!!getUrlInfo && url) {
 		try {
 			const urlInfo = await getUrlInfo(url)
+			trace('messages', 'generateLinkPreviewIfRequired:return', { hasUrlInfo: !!urlInfo })
 			return urlInfo
 		} catch (error: any) {
 			// ignore if fails
@@ -125,6 +133,7 @@ export const prepareWAMessageMedia = async (
 	message: AnyMediaMessageContent,
 	options: MessageContentGenerationOptions
 ) => {
+	trace('messages', 'prepareWAMessageMedia:enter', { hasOptions: !!options })
 	const logger = options.logger
 
 	let mediaType: (typeof MEDIA_KEYS)[number] | undefined
@@ -169,6 +178,7 @@ export const prepareWAMessageMedia = async (
 
 			Object.assign(obj[key as keyof proto.Message]!, { ...uploadData, media: undefined })
 
+			trace('messages', 'prepareWAMessageMedia:return_cache', { mediaType, cacheableKey })
 			return obj
 		}
 	}
@@ -176,6 +186,7 @@ export const prepareWAMessageMedia = async (
 	const isNewsletter = !!options.jid && isJidNewsletter(options.jid)
 	if (isNewsletter) {
 		logger?.info({ key: cacheableKey }, 'Preparing raw media for newsletter')
+		trace('messages', 'prepareWAMessageMedia:newsletter_upload', { mediaType })
 		const { filePath, fileSha256, fileLength } = await getRawMediaUploadData(
 			uploadData.media,
 			options.mediaTypeOverride || mediaType,
@@ -217,6 +228,7 @@ export const prepareWAMessageMedia = async (
 			await options.mediaCache!.set(cacheableKey, WAProto.Message.encode(obj).finish())
 		}
 
+		trace('messages', 'prepareWAMessageMedia:return_newsletter', { mediaType, cacheableKey })
 		return obj
 	}
 
@@ -320,10 +332,12 @@ export const prepareWAMessageMedia = async (
 		await options.mediaCache!.set(cacheableKey, WAProto.Message.encode(obj).finish())
 	}
 
+	trace('messages', 'prepareWAMessageMedia:return', { mediaType, cacheableKey })
 	return obj
 }
 
 export const prepareDisappearingMessageSettingContent = (ephemeralExpiration?: number) => {
+	trace('messages', 'prepareDisappearingMessageSettingContent:enter', { ephemeralExpiration })
 	ephemeralExpiration = ephemeralExpiration || 0
 	const content: WAMessageContent = {
 		ephemeralMessage: {
@@ -331,10 +345,12 @@ export const prepareDisappearingMessageSettingContent = (ephemeralExpiration?: n
 				protocolMessage: {
 					type: WAProto.Message.ProtocolMessage.Type.EPHEMERAL_SETTING,
 					ephemeralExpiration
+					//ephemeralSettingTimestamp: options.ephemeralOptions.eph_setting_ts?.toString()
 				}
 			}
 		}
 	}
+	trace('messages', 'prepareDisappearingMessageSettingContent:return')
 	return WAProto.Message.fromObject(content)
 }
 
@@ -344,6 +360,7 @@ export const prepareDisappearingMessageSettingContent = (ephemeralExpiration?: n
  * @param options.forceForward will show the message as forwarded even if it is from you
  */
 export const generateForwardMessageContent = (message: WAMessage, forceForward?: boolean) => {
+	trace('messages', 'generateForwardMessageContent:enter', { messageId: message.key.id, hasContent: !!message.message })
 	let content = message.message
 	if (!content) {
 		throw new Boom('no content in message', { statusCode: 400 })
@@ -371,6 +388,7 @@ export const generateForwardMessageContent = (message: WAMessage, forceForward?:
 		key_.contextInfo = {}
 	}
 
+	trace('messages', 'generateForwardMessageContent:return', { score, key })
 	return content
 }
 
@@ -378,13 +396,15 @@ export const hasNonNullishProperty = <K extends PropertyKey>(
 	message: AnyMessageContent,
 	key: K
 ): message is ExtractByKey<AnyMessageContent, K> => {
-	return (
+	const result = (
 		typeof message === 'object' &&
 		message !== null &&
 		key in message &&
 		(message as any)[key] !== null &&
 		(message as any)[key] !== undefined
 	)
+	trace('messages', 'hasNonNullishProperty:return', { key, result })
+	return result
 }
 
 function hasOptionalProperty<T, K extends PropertyKey>(obj: T, key: K): obj is WithKey<T, K> {
@@ -395,6 +415,7 @@ export const generateWAMessageContent = async (
 	message: AnyMessageContent,
 	options: MessageContentGenerationOptions
 ) => {
+	trace('messages', 'generateWAMessageContent:enter', { hasJid: !!options.jid })
 	let m: WAMessageContent = {}
 	if (hasNonNullishProperty(message, 'text')) {
 		const extContent = { text: message.text } as WATextMessage
@@ -609,6 +630,8 @@ export const generateWAMessageContent = async (
 		m = { viewOnceMessage: { message: m } }
 	}
 
+	trace('messages', 'generateWAMessageContent:return', { contentType: Object.keys(m)[0] })
+
 	if (hasOptionalProperty(message, 'mentions') && message.mentions?.length) {
 		const messageType = Object.keys(m)[0]! as Extract<keyof proto.IMessage, MessageWithContextInfo>
 		const key = m[messageType]
@@ -657,6 +680,7 @@ export const generateWAMessageFromContent = (
 	message: WAMessageContent,
 	options: MessageGenerationOptionsFromContent
 ) => {
+	trace('messages', 'generateWAMessageFromContent:enter', { jid, hasQuoted: !!options.quoted })
 	// set timestamp to now
 	// if not specified
 	if (!options.timestamp) {
@@ -733,21 +757,27 @@ export const generateWAMessageFromContent = (
 		participant: isJidGroup(jid) || isJidStatusBroadcast(jid) ? userJid : undefined, // TODO: Add support for LIDs
 		status: WAMessageStatus.PENDING
 	}
+	trace('messages', 'generateWAMessageFromContent:return', { messageId: messageJSON.key.id, contentType: key })
 	return WAProto.WebMessageInfo.fromObject(messageJSON) as WAMessage
 }
 
 export const generateWAMessage = async (jid: string, content: AnyMessageContent, options: MessageGenerationOptions) => {
+	trace('messages', 'generateWAMessage:enter', { jid, messageId: options.messageId })
 	// ensure msg ID is with every log
 	options.logger = options?.logger?.child({ msgId: options.messageId })
 	// Pass jid in the options to generateWAMessageContent
-	return generateWAMessageFromContent(jid, await generateWAMessageContent(content, { ...options, jid }), options)
+	const result = generateWAMessageFromContent(jid, await generateWAMessageContent(content, { ...options, jid }), options)
+	trace('messages', 'generateWAMessage:return', { messageId: result.key.id })
+	return result
 }
 
 /** Get the key to access the true type of content */
 export const getContentType = (content: proto.IMessage | undefined) => {
+	trace('messages', 'getContentType:enter', { hasContent: !!content })
 	if (content) {
 		const keys = Object.keys(content)
 		const key = keys.find(k => (k === 'conversation' || k.includes('Message')) && k !== 'senderKeyDistributionMessage')
+		trace('messages', 'getContentType:return', { key })
 		return key as keyof typeof content
 	}
 }
@@ -759,6 +789,7 @@ export const getContentType = (content: proto.IMessage | undefined) => {
  * @returns
  */
 export const normalizeMessageContent = (content: WAMessageContent | null | undefined): WAMessageContent | undefined => {
+	trace('messages', 'normalizeMessageContent:enter', { hasContent: !!content })
 	if (!content) {
 		return undefined
 	}
@@ -773,6 +804,8 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 		content = inner.message
 	}
 
+	const traceContent = content
+	trace('messages', 'normalizeMessageContent:return', { contentType: Object.keys(traceContent!)[0] })
 	return content!
 
 	function getFutureProofMessage(message: typeof content) {
@@ -795,6 +828,7 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
  * Eg. extracts the inner message from a disappearing message/view once message
  */
 export const extractMessageContent = (content: WAMessageContent | undefined | null): WAMessageContent | undefined => {
+	trace('messages', 'extractMessageContent:enter', { hasContent: !!content })
 	const extractFromTemplateMessage = (
 		msg: proto.Message.TemplateMessage.IHydratedFourRowTemplate | proto.Message.IButtonsMessage
 	) => {
@@ -817,29 +851,39 @@ export const extractMessageContent = (content: WAMessageContent | undefined | nu
 	content = normalizeMessageContent(content)
 
 	if (content?.buttonsMessage) {
-		return extractFromTemplateMessage(content.buttonsMessage)
+		const result = extractFromTemplateMessage(content.buttonsMessage)
+		trace('messages', 'extractMessageContent:return', { type: 'buttonsMessage' })
+		return result
 	}
 
 	if (content?.templateMessage?.hydratedFourRowTemplate) {
-		return extractFromTemplateMessage(content?.templateMessage?.hydratedFourRowTemplate)
+		const result = extractFromTemplateMessage(content?.templateMessage?.hydratedFourRowTemplate)
+		trace('messages', 'extractMessageContent:return', { type: 'hydratedFourRowTemplate' })
+		return result
 	}
 
 	if (content?.templateMessage?.hydratedTemplate) {
-		return extractFromTemplateMessage(content?.templateMessage?.hydratedTemplate)
+		const result = extractFromTemplateMessage(content?.templateMessage?.hydratedTemplate)
+		trace('messages', 'extractMessageContent:return', { type: 'hydratedTemplate' })
+		return result
 	}
 
 	if (content?.templateMessage?.fourRowTemplate) {
-		return extractFromTemplateMessage(content?.templateMessage?.fourRowTemplate)
+		const result = extractFromTemplateMessage(content?.templateMessage?.fourRowTemplate)
+		trace('messages', 'extractMessageContent:return', { type: 'fourRowTemplate' })
+		return result
 	}
 
+	trace('messages', 'extractMessageContent:return', { type: 'direct' })
 	return content
 }
 
 /**
  * Returns the device predicted by message ID
  */
-export const getDevice = (id: string) =>
-	/^3A.{18}$/.test(id)
+export const getDevice = (id: string) => {
+	trace('messages', 'getDevice:enter', { id })
+	const result = /^3A.{18}$/.test(id)
 		? 'ios'
 		: /^3E.{20}$/.test(id)
 			? 'web'
@@ -848,9 +892,13 @@ export const getDevice = (id: string) =>
 				: /^(3F|.{18}$)/.test(id)
 					? 'desktop'
 					: 'unknown'
+	trace('messages', 'getDevice:return', { device: result })
+	return result
+}
 
 /** Upserts a receipt in the message */
 export const updateMessageWithReceipt = (msg: Pick<WAMessage, 'userReceipt'>, receipt: MessageUserReceipt) => {
+	trace('messages', 'updateMessageWithReceipt:enter', { userJid: receipt.userJid })
 	msg.userReceipt = msg.userReceipt || []
 	const recp = msg.userReceipt.find(m => m.userJid === receipt.userJid)
 	if (recp) {
@@ -858,11 +906,13 @@ export const updateMessageWithReceipt = (msg: Pick<WAMessage, 'userReceipt'>, re
 	} else {
 		msg.userReceipt.push(receipt)
 	}
+	trace('messages', 'updateMessageWithReceipt:return')
 }
 
 /** Update the message with a new reaction */
 export const updateMessageWithReaction = (msg: Pick<WAMessage, 'reactions'>, reaction: proto.IReaction) => {
 	const authorID = getKeyAuthor(reaction.key)
+	trace('messages', 'updateMessageWithReaction:enter', { authorID, text: reaction.text })
 
 	const reactions = (msg.reactions || []).filter(r => getKeyAuthor(r.key) !== authorID)
 	reaction.text = reaction.text || ''
@@ -873,6 +923,7 @@ export const updateMessageWithReaction = (msg: Pick<WAMessage, 'reactions'>, rea
 /** Update the message with a new poll update */
 export const updateMessageWithPollUpdate = (msg: Pick<WAMessage, 'pollUpdates'>, update: proto.IPollUpdate) => {
 	const authorID = getKeyAuthor(update.pollUpdateMessageKey)
+	trace('messages', 'updateMessageWithPollUpdate:enter', { authorID })
 
 	const reactions = (msg.pollUpdates || []).filter(r => getKeyAuthor(r.pollUpdateMessageKey) !== authorID)
 	if (update.vote?.selectedOptions?.length) {
@@ -888,6 +939,7 @@ export const updateMessageWithEventResponse = (
 	update: proto.IEventResponse
 ) => {
 	const authorID = getKeyAuthor(update.eventResponseMessageKey)
+	trace('messages', 'updateMessageWithEventResponse:enter', { authorID })
 
 	const responses = (msg.eventResponses || []).filter(r => getKeyAuthor(r.eventResponseMessageKey) !== authorID)
 	responses.push(update)
@@ -910,6 +962,7 @@ export function getAggregateVotesInPollMessage(
 	{ message, pollUpdates }: Pick<WAMessage, 'pollUpdates' | 'message'>,
 	meId?: string
 ) {
+	trace('messages', 'getAggregateVotesInPollMessage:enter', { updateCount: pollUpdates?.length })
 	const opts =
 		message?.pollCreationMessage?.options ||
 		message?.pollCreationMessageV2?.options ||
@@ -948,6 +1001,7 @@ export function getAggregateVotesInPollMessage(
 		}
 	}
 
+	trace('messages', 'getAggregateVotesInPollMessage:return', { optionCount: Object.keys(voteHashMap).length })
 	return Object.values(voteHashMap)
 }
 
@@ -966,6 +1020,7 @@ export function getAggregateResponsesInEventMessage(
 	{ eventResponses }: Pick<WAMessage, 'eventResponses'>,
 	meId?: string
 ) {
+	trace('messages', 'getAggregateResponsesInEventMessage:enter', { responseCount: eventResponses?.length })
 	const responseTypes = ['GOING', 'NOT_GOING', 'MAYBE']
 	const responseMap: { [_: string]: ResponseAggregation } = {}
 
@@ -983,11 +1038,13 @@ export function getAggregateResponsesInEventMessage(
 		}
 	}
 
+	trace('messages', 'getAggregateResponsesInEventMessage:return')
 	return Object.values(responseMap)
 }
 
 /** Given a list of message keys, aggregates them by chat & sender. Useful for sending read receipts in bulk */
 export const aggregateMessageKeysNotFromMe = (keys: WAMessageKey[]) => {
+	trace('messages', 'aggregateMessageKeysNotFromMe:enter', { keyCount: keys.length })
 	const keyMap: { [id: string]: { jid: string; participant: string | undefined; messageIds: string[] } } = {}
 	for (const { remoteJid, id, participant, fromMe } of keys) {
 		if (!fromMe) {
@@ -1004,6 +1061,7 @@ export const aggregateMessageKeysNotFromMe = (keys: WAMessageKey[]) => {
 		}
 	}
 
+	trace('messages', 'aggregateMessageKeysNotFromMe:return', { groupCount: Object.keys(keyMap).length })
 	return Object.values(keyMap)
 }
 
@@ -1023,6 +1081,7 @@ export const downloadMediaMessage = async <Type extends 'buffer' | 'stream'>(
 	options: MediaDownloadOptions,
 	ctx?: DownloadMediaMessageContext
 ) => {
+	trace('messages', 'downloadMediaMessage:enter', { messageId: message.key.id, type })
 	const result = await downloadMsg().catch(async error => {
 		if (
 			ctx &&
@@ -1039,6 +1098,7 @@ export const downloadMediaMessage = async <Type extends 'buffer' | 'stream'>(
 		throw error
 	})
 
+	trace('messages', 'downloadMediaMessage:return')
 	return result as Type extends 'buffer' ? Buffer : Transform
 
 	async function downloadMsg() {
@@ -1082,6 +1142,7 @@ export const downloadMediaMessage = async <Type extends 'buffer' | 'stream'>(
 
 /** Checks whether the given message is a media message; if it is returns the inner content */
 export const assertMediaContent = (content: proto.IMessage | null | undefined) => {
+	trace('messages', 'assertMediaContent:enter', { hasContent: !!content })
 	content = extractMessageContent(content)
 	const mediaContent =
 		content?.documentMessage ||
@@ -1093,5 +1154,7 @@ export const assertMediaContent = (content: proto.IMessage | null | undefined) =
 		throw new Boom('given message is not a media message', { statusCode: 400, data: content })
 	}
 
+	const mediaTypeKey = content ? Object.keys(content).find(k => typeof k === 'string') : undefined
+	trace('messages', 'assertMediaContent:return', { mediaType: mediaTypeKey })
 	return mediaContent
 }

@@ -5,6 +5,7 @@ import type { LIDMapping, SignalAuthState, SignalKeyStoreWithTransaction } from 
 import type { SignalRepositoryWithLIDStore } from '../Types/Signal'
 import { generateSignalPubKey } from '../Utils'
 import type { ILogger } from '../Utils/logger'
+import { trace } from '../Utils/trace-logger'
 import {
 	isHostedLidUser,
 	isHostedPnUser,
@@ -25,6 +26,7 @@ export function makeLibSignalRepository(
 	logger: ILogger,
 	pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>
 ): SignalRepositoryWithLIDStore {
+	trace('libsignal', 'makeLibSignalRepository:enter', { hasPnToLIDFunc: !!pnToLIDFunc })
 	const lidMapping = new LIDMappingStore(auth.keys as SignalKeyStoreWithTransaction, logger, pnToLIDFunc)
 	const storage = signalStorage(auth, lidMapping)
 
@@ -37,15 +39,19 @@ export function makeLibSignalRepository(
 
 	const repository: SignalRepositoryWithLIDStore = {
 		decryptGroupMessage({ group, authorJid, msg }) {
+			trace('libsignal', 'decryptGroupMessage:enter', { group, authorJid, msgLen: msg.length })
 			const senderName = jidToSignalSenderKeyName(group, authorJid)
 			const cipher = new GroupCipher(storage, senderName)
 
 			// Use transaction to ensure atomicity
 			return parsedKeys.transaction(async () => {
-				return cipher.decrypt(msg)
+				const result = await cipher.decrypt(msg)
+				trace('libsignal', 'decryptGroupMessage:return', { plaintextLen: result.length })
+				return result
 			}, group)
 		},
 		async processSenderKeyDistributionMessage({ item, authorJid }) {
+			trace('libsignal', 'processSenderKeyDistributionMessage:enter', { authorJid, groupId: item.groupId })
 			const builder = new GroupSessionBuilder(storage)
 			if (!item.groupId) {
 				throw new Error('Group ID is required for sender key distribution message')
@@ -73,14 +79,16 @@ export function makeLibSignalRepository(
 				}
 
 				await builder.process(senderName, senderMsg)
+				trace('libsignal', 'processSenderKeyDistributionMessage:complete', { senderName: senderName.toString() })
 			}, item.groupId)
 		},
 		async decryptMessage({ jid, type, ciphertext }) {
+			trace('libsignal', 'decryptMessage:enter', { jid, type, ciphertextLen: ciphertext.length })
 			const addr = jidToSignalProtocolAddress(jid)
 			const session = new libsignal.SessionCipher(storage, addr)
 
 			async function doDecrypt() {
-				let result: Buffer
+				let result: Uint8Array
 				switch (type) {
 					case 'pkmsg':
 						result = await session.decryptPreKeyWhisperMessage(ciphertext)
@@ -90,6 +98,7 @@ export function makeLibSignalRepository(
 						break
 				}
 
+				trace('libsignal', 'decryptMessage:decrypted', { type, plaintextLen: result.length })
 				return result
 			}
 
@@ -101,18 +110,22 @@ export function makeLibSignalRepository(
 		},
 
 		async encryptMessage({ jid, data }) {
+			trace('libsignal', 'encryptMessage:enter', { jid, dataLen: data.length })
 			const addr = jidToSignalProtocolAddress(jid)
 			const cipher = new libsignal.SessionCipher(storage, addr)
 
 			// Use transaction to ensure atomicity
 			return parsedKeys.transaction(async () => {
 				const { type: sigType, body } = await cipher.encrypt(data)
-				const type = sigType === 3 ? 'pkmsg' : 'msg'
-				return { type, ciphertext: Buffer.from(body, 'binary') }
+				const type = sigType === 3 ? 'pkmsg' as const : 'msg' as const
+				const result = { type, ciphertext: Buffer.from(body, 'binary') }
+				trace('libsignal', 'encryptMessage:return', { type, ciphertextLen: result.ciphertext.length })
+				return result
 			}, jid)
 		},
 
 		async encryptGroupMessage({ group, meId, data }) {
+			trace('libsignal', 'encryptGroupMessage:enter', { group, meId, dataLen: data.length })
 			const senderName = jidToSignalSenderKeyName(group, meId)
 			const builder = new GroupSessionBuilder(storage)
 
@@ -121,6 +134,7 @@ export function makeLibSignalRepository(
 			return parsedKeys.transaction(async () => {
 				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
 				if (!senderKey) {
+					trace('libsignal', 'encryptGroupMessage: creatingSenderKeyRecord', { senderName: senderNameStr })
 					await storage.storeSenderKey(senderName, new SenderKeyRecord())
 				}
 
@@ -128,18 +142,22 @@ export function makeLibSignalRepository(
 				const session = new GroupCipher(storage, senderName)
 				const ciphertext = await session.encrypt(data)
 
-				return {
+				const result = {
 					ciphertext,
 					senderKeyDistributionMessage: senderKeyDistributionMessage.serialize()
 				}
+				trace('libsignal', 'encryptGroupMessage:return', { ciphertextLen: ciphertext.length, skdmLen: result.senderKeyDistributionMessage.length })
+				return result
 			}, group)
 		},
 
 		async injectE2ESession({ jid, session }) {
 			logger.trace({ jid }, 'injecting E2EE session')
+			trace('libsignal', 'injectE2ESession:enter', { jid, registrationId: session.registrationId })
 			const cipher = new libsignal.SessionBuilder(storage, jidToSignalProtocolAddress(jid))
 			return parsedKeys.transaction(async () => {
 				await cipher.initOutgoing(session)
+				trace('libsignal', 'injectE2ESession:complete', { jid })
 			}, jid)
 		},
 		jidToSignalProtocolAddress(jid) {
@@ -150,25 +168,31 @@ export function makeLibSignalRepository(
 		lidMapping,
 
 		async validateSession(jid: string) {
+			trace('libsignal', 'validateSession:enter', { jid })
 			try {
 				const addr = jidToSignalProtocolAddress(jid)
 				const session = await storage.loadSession(addr.toString())
 
 				if (!session) {
+					trace('libsignal', 'validateSession:noSession', { jid })
 					return { exists: false, reason: 'no session' }
 				}
 
 				if (!session.haveOpenSession()) {
+					trace('libsignal', 'validateSession:noOpenSession', { jid })
 					return { exists: false, reason: 'no open session' }
 				}
 
+				trace('libsignal', 'validateSession:valid', { jid })
 				return { exists: true }
 			} catch (error) {
+				trace('libsignal', 'validateSession:error', { jid, error: String(error) })
 				return { exists: false, reason: 'validation error' }
 			}
 		},
 
 		async deleteSession(jids: string[]) {
+			trace('libsignal', 'deleteSession:enter', { jidsCount: jids.length, jids })
 			if (!jids.length) return
 
 			// Convert JIDs to signal addresses and prepare for bulk deletion
@@ -181,6 +205,7 @@ export function makeLibSignalRepository(
 			// Single transaction for all deletions
 			return parsedKeys.transaction(async () => {
 				await auth.keys.set({ session: sessionUpdates })
+				trace('libsignal', 'deleteSession:complete', { deletedCount: jids.length })
 			}, `delete-${jids.length}-sessions`)
 		},
 
@@ -188,11 +213,16 @@ export function makeLibSignalRepository(
 			fromJid: string,
 			toJid: string
 		): Promise<{ migrated: number; skipped: number; total: number }> {
+			trace('libsignal', 'migrateSession:enter', { fromJid, toJid })
 			// TODO: use usync to handle this entire mess
-			if (!fromJid || (!isLidUser(toJid) && !isHostedLidUser(toJid))) return { migrated: 0, skipped: 0, total: 0 }
+			if (!fromJid || (!isLidUser(toJid) && !isHostedLidUser(toJid))) {
+				trace('libsignal', 'migrateSession:skip-invalid', { fromJid, toJid })
+				return { migrated: 0, skipped: 0, total: 0 }
+			}
 
 			// Only support PN to LID migration
 			if (!isPnUser(fromJid) && !isHostedPnUser(fromJid)) {
+				trace('libsignal', 'migrateSession:skip-not-pn', { fromJid })
 				return { migrated: 0, skipped: 0, total: 1 }
 			}
 
@@ -203,6 +233,7 @@ export function makeLibSignalRepository(
 			// Get user's device list from storage
 			const { [user]: userDevices } = await parsedKeys.get('device-list', [user])
 			if (!userDevices) {
+				trace('libsignal', 'migrateSession:noDevices', { user })
 				return { migrated: 0, skipped: 0, total: 0 }
 			}
 
@@ -322,6 +353,7 @@ export function makeLibSignalRepository(
 					}
 
 					const skippedCount = totalOps - migratedCount
+					trace('libsignal', 'migrateSession:result', { fromJid, toJid, migrated: migratedCount, skipped: skippedCount, total: totalOps })
 					return { migrated: migratedCount, skipped: skippedCount, total: totalOps }
 				},
 				`migrate-${deviceJids.length}-sessions-${jidDecode(toJid)?.user}`
@@ -329,6 +361,7 @@ export function makeLibSignalRepository(
 		}
 	}
 
+	trace('libsignal', 'makeLibSignalRepository:return', { repository })
 	return repository
 }
 
@@ -383,37 +416,49 @@ function signalStorage(
 
 	return {
 		loadSession: async (id: string) => {
+			trace('libsignal', 'signalStorage.loadSession:enter', { id })
 			try {
 				const wireJid = await resolveLIDSignalAddress(id)
 				const { [wireJid]: sess } = await keys.get('session', [wireJid])
 
 				if (sess) {
+					trace('libsignal', 'signalStorage.loadSession:found', { id, wireJid, sessionLen: sess.length })
 					return libsignal.SessionRecord.deserialize(sess)
 				}
 			} catch (e) {
+				trace('libsignal', 'signalStorage.loadSession:error', { id, error: String(e) })
 				return null
 			}
 
+			trace('libsignal', 'signalStorage.loadSession:notFound', { id })
 			return null
 		},
 		storeSession: async (id: string, session: libsignal.SessionRecord) => {
+			trace('libsignal', 'signalStorage.storeSession:enter', { id })
 			const wireJid = await resolveLIDSignalAddress(id)
 			await keys.set({ session: { [wireJid]: session.serialize() } })
+			trace('libsignal', 'signalStorage.storeSession:complete', { id, wireJid })
 		},
 		isTrustedIdentity: () => {
 			return true // todo: implement
 		},
 		loadPreKey: async (id: number | string) => {
+			trace('libsignal', 'signalStorage.loadPreKey:enter', { id })
 			const keyId = id.toString()
 			const { [keyId]: key } = await keys.get('pre-key', [keyId])
 			if (key) {
+				trace('libsignal', 'signalStorage.loadPreKey:found', { id })
 				return {
 					privKey: Buffer.from(key.private),
 					pubKey: Buffer.from(key.public)
 				}
 			}
+			trace('libsignal', 'signalStorage.loadPreKey:notFound', { id })
 		},
-		removePreKey: (id: number) => keys.set({ 'pre-key': { [id]: null } }),
+		removePreKey: (id: number) => {
+			trace('libsignal', 'signalStorage.removePreKey:enter', { id })
+			return keys.set({ 'pre-key': { [id]: null } })
+		},
 		loadSignedPreKey: () => {
 			const key = creds.signedPreKey
 			return {
@@ -423,17 +468,22 @@ function signalStorage(
 		},
 		loadSenderKey: async (senderKeyName: SenderKeyName) => {
 			const keyId = senderKeyName.toString()
+			trace('libsignal', 'signalStorage.loadSenderKey:enter', { keyId })
 			const { [keyId]: key } = await keys.get('sender-key', [keyId])
 			if (key) {
+				trace('libsignal', 'signalStorage.loadSenderKey:found', { keyId, keyLen: key.length })
 				return SenderKeyRecord.deserialize(key)
 			}
 
+			trace('libsignal', 'signalStorage.loadSenderKey:notFound-creating', { keyId })
 			return new SenderKeyRecord()
 		},
 		storeSenderKey: async (senderKeyName: SenderKeyName, key: SenderKeyRecord) => {
 			const keyId = senderKeyName.toString()
+			trace('libsignal', 'signalStorage.storeSenderKey:enter', { keyId })
 			const serialized = JSON.stringify(key.serialize())
 			await keys.set({ 'sender-key': { [keyId]: Buffer.from(serialized, 'utf-8') } })
+			trace('libsignal', 'signalStorage.storeSenderKey:complete', { keyId, serializedLen: serialized.length })
 		},
 		getOurRegistrationId: () => creds.registrationId,
 		getOurIdentity: () => {

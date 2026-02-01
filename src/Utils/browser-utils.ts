@@ -1,6 +1,7 @@
 import { platform, release } from 'os'
 import { proto } from '../../WAProto/index.js'
 import type { BrowsersMap } from '../Types'
+import { trace } from './trace-logger'
 
 const PLATFORM_MAP = {
 	aix: 'AIX',
@@ -26,6 +27,9 @@ export const Browsers: BrowsersMap = {
 }
 
 export const getPlatformId = (browser: string) => {
+	trace('browser-utils', 'getPlatformId:enter', { browser })
 	const platformType = proto.DeviceProps.PlatformType[browser.toUpperCase() as any]
-	return platformType ? platformType.toString() : '1' //chrome
+	const result = platformType ? platformType.toString() : '1' //chrome
+	trace('browser-utils', 'getPlatformId:return', { platformId: result })
+	return result
 }

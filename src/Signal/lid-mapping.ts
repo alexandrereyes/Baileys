@@ -2,6 +2,7 @@ import { LRUCache } from 'lru-cache'
 import type { LIDMapping, SignalKeyStoreWithTransaction } from '../Types'
 import type { ILogger } from '../Utils/logger'
 import { isHostedPnUser, isLidUser, isPnUser, jidDecode, jidNormalizedUser, WAJIDDomains } from '../WABinary'
+import { trace } from '../Utils/trace-logger'
 
 export class LIDMappingStore {
 	private readonly mappingCache = new LRUCache<string, string>({
@@ -19,6 +20,7 @@ export class LIDMappingStore {
 		logger: ILogger,
 		pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>
 	) {
+		trace('lid-mapping', 'LIDMappingStore.constructor', { hasPnToLIDFunc: !!pnToLIDFunc })
 		this.keys = keys
 		this.pnToLIDFunc = pnToLIDFunc
 		this.logger = logger
@@ -28,6 +30,7 @@ export class LIDMappingStore {
 	 * Store LID-PN mapping - USER LEVEL
 	 */
 	async storeLIDPNMappings(pairs: LIDMapping[]): Promise<void> {
+		trace('lid-mapping', 'storeLIDPNMappings:enter', { pairsCount: pairs.length })
 		// Validate inputs
 		const pairMap: { [_: string]: string } = {}
 		for (const { lid, pn } of pairs) {
@@ -78,6 +81,7 @@ export class LIDMappingStore {
 				this.mappingCache.set(`pn:${pnUser}`, lidUser)
 				this.mappingCache.set(`lid:${lidUser}`, pnUser)
 			}
+			trace('lid-mapping', 'storeLIDPNMappings:complete', { storedCount: Object.keys(pairMap).length })
 		}, 'lid-mapping')
 	}
 
@@ -85,10 +89,14 @@ export class LIDMappingStore {
 	 * Get LID for PN - Returns device-specific LID based on user mapping
 	 */
 	async getLIDForPN(pn: string): Promise<string | null> {
-		return (await this.getLIDsForPNs([pn]))?.[0]?.lid || null
+		trace('lid-mapping', 'getLIDForPN:enter', { pn })
+		const result = (await this.getLIDsForPNs([pn]))?.[0]?.lid || null
+		trace('lid-mapping', 'getLIDForPN:return', { pn, result: result || 'null' })
+		return result
 	}
 
 	async getLIDsForPNs(pns: string[]): Promise<LIDMapping[] | null> {
+		trace('lid-mapping', 'getLIDsForPNs:enter', { pnsCount: pns.length, pns })
 		const usyncFetch: { [_: string]: number[] } = {}
 		// mapped from pn to lid mapping to prevent duplication in results later
 		const successfulPairs: { [_: string]: LIDMapping } = {}
@@ -196,17 +204,23 @@ export class LIDMappingStore {
 			}
 		}
 
-		return Object.values(successfulPairs).length > 0 ? Object.values(successfulPairs) : null
+		const resultPairs = Object.values(successfulPairs).length > 0 ? Object.values(successfulPairs) : null
+		trace('lid-mapping', 'getLIDsForPNs:return', { resultCount: resultPairs?.length || 0 })
+		return resultPairs
 	}
 
 	/**
 	 * Get PN for LID - USER LEVEL with device construction
 	 */
 	async getPNForLID(lid: string): Promise<string | null> {
-		return (await this.getPNsForLIDs([lid]))?.[0]?.pn || null
+		trace('lid-mapping', 'getPNForLID:enter', { lid })
+		const result = (await this.getPNsForLIDs([lid]))?.[0]?.pn || null
+		trace('lid-mapping', 'getPNForLID:return', { lid, result: result || 'null' })
+		return result
 	}
 
 	async getPNsForLIDs(lids: string[]): Promise<LIDMapping[] | null> {
+		trace('lid-mapping', 'getPNsForLIDs:enter', { lidsCount: lids.length, lids })
 		const successfulPairs: { [_: string]: LIDMapping } = {}
 		const pending: Array<{ lid: string; lidUser: string; decoded: ReturnType<typeof jidDecode> }> = []
 
@@ -263,6 +277,8 @@ export class LIDMappingStore {
 			}
 		}
 
-		return Object.values(successfulPairs).length ? Object.values(successfulPairs) : null
+		const resultPairs = Object.values(successfulPairs).length ? Object.values(successfulPairs) : null
+		trace('lid-mapping', 'getPNsForLIDs:return', { resultCount: resultPairs?.length || 0 })
+		return resultPairs
 	}
 }

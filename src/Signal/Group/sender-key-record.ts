@@ -1,5 +1,6 @@
 import { BufferJSON } from '../../Utils/generics'
 import { SenderKeyState } from './sender-key-state'
+import { trace } from '../../Utils/trace-logger'
 
 export interface SenderKeyStateStructure {
 	senderKeyId: number
@@ -22,6 +23,7 @@ export class SenderKeyRecord {
 	private readonly senderKeyStates: SenderKeyState[] = []
 
 	constructor(serialized?: SenderKeyStateStructure[]) {
+		trace('sender-key-record', 'SenderKeyRecord.constructor', { hasSerialized: !!serialized, statesCount: serialized?.length || 0 })
 		if (serialized) {
 			for (const structure of serialized) {
 				this.senderKeyStates.push(new SenderKeyState(null, null, null, null, null, null, structure))
@@ -42,8 +44,10 @@ export class SenderKeyRecord {
 	}
 
 	public addSenderKeyState(id: number, iteration: number, chainKey: Uint8Array, signatureKey: Uint8Array): void {
+		trace('sender-key-record', 'SenderKeyRecord.addSenderKeyState', { id, iteration, chainKeyLen: chainKey.length, signatureKeyLen: signatureKey.length })
 		this.senderKeyStates.push(new SenderKeyState(id, iteration, chainKey, null, signatureKey))
 		if (this.senderKeyStates.length > this.MAX_STATES) {
+			trace('sender-key-record', 'SenderKeyRecord.addSenderKeyState:shifted', { statesCount: this.senderKeyStates.length })
 			this.senderKeyStates.shift()
 		}
 	}
@@ -54,6 +58,7 @@ export class SenderKeyRecord {
 		chainKey: Uint8Array,
 		keyPair: { public: Uint8Array; private: Uint8Array }
 	): void {
+		trace('sender-key-record', 'SenderKeyRecord.setSenderKeyState', { id, iteration, chainKeyLen: chainKey.length, publicKeyLen: keyPair.public.length })
 		this.senderKeyStates.length = 0
 		this.senderKeyStates.push(new SenderKeyState(id, iteration, chainKey, keyPair))
 	}
@@ -62,6 +67,7 @@ export class SenderKeyRecord {
 		return this.senderKeyStates.map(state => state.getStructure())
 	}
 	static deserialize(data: Uint8Array): SenderKeyRecord {
+		trace('sender-key-record', 'SenderKeyRecord.deserialize', { dataLen: data.length })
 		const str = Buffer.from(data).toString('utf-8')
 		const parsed = JSON.parse(str, BufferJSON.reviver)
 		return new SenderKeyRecord(parsed)

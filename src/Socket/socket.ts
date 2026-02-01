@@ -52,6 +52,7 @@ import {
 import { BinaryInfo } from '../WAM/BinaryInfo.js'
 import { USyncQuery, USyncUser } from '../WAUSync/'
 import { WebSocketClient } from './Client'
+import { trace } from '../Utils/trace-logger'
 
 /**
  * Connects to WA servers and performs:
@@ -61,6 +62,7 @@ import { WebSocketClient } from './Client'
  */
 
 export const makeSocket = (config: SocketConfig) => {
+	trace('socket', 'makeSocket:enter', { waWebSocketUrl: config.waWebSocketUrl?.toString() })
 	const {
 		waWebSocketUrl,
 		connectTimeoutMs,
@@ -123,6 +125,7 @@ export const makeSocket = (config: SocketConfig) => {
 	const sendPromise = promisify(ws.send)
 	/** send a raw buffer */
 	const sendRawMessage = async (data: Uint8Array | Buffer) => {
+		trace('socket', 'sendRawMessage', { dataLen: data.length })
 		if (!ws.isOpen) {
 			throw new Boom('Connection Closed', { statusCode: DisconnectReason.connectionClosed })
 		}
@@ -140,6 +143,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	/** send a binary node */
 	const sendNode = (frame: BinaryNode) => {
+		trace('socket', 'sendNode', { tag: frame.tag, attrs: frame.attrs })
 		if (logger.level === 'trace') {
 			logger.trace({ xml: binaryNodeToString(frame), msg: 'xml send' })
 		}
@@ -154,6 +158,7 @@ export const makeSocket = (config: SocketConfig) => {
 	 * @param timeoutMs timeout after which the promise will reject
 	 */
 	const waitForMessage = async <T>(msgId: string, timeoutMs = defaultQueryTimeoutMs) => {
+		trace('socket', 'waitForMessage', { msgId, timeoutMs })
 		let onRecv: ((data: T) => void) | undefined
 		let onErr: ((err: Error) => void) | undefined
 		try {
@@ -197,6 +202,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	/** send a query, and wait for its response. auto-generates message ID if not provided */
 	const query = async (node: BinaryNode, timeoutMs?: number) => {
+		trace('socket', 'query', { tag: node.tag, xmlns: node.attrs?.xmlns, type: node.attrs?.type, timeoutMs })
 		if (!node.attrs.id) {
 			node.attrs.id = generateMessageTag()
 		}
@@ -219,6 +225,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	// Validate current key-bundle on server; on failure, trigger pre-key upload and rethrow
 	const digestKeyBundle = async (): Promise<void> => {
+		trace('socket', 'digestKeyBundle:enter', {})
 		const res = await query({
 			tag: 'iq',
 			attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
@@ -233,6 +240,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	// Rotate our signed pre-key on server; on failure, run digest as fallback and rethrow
 	const rotateSignedPreKey = async (): Promise<void> => {
+		trace('socket', 'rotateSignedPreKey:enter', {})
 		const newId = (creds.signedPreKey.keyId || 0) + 1
 		const skey = await signedKeyPair(creds.signedIdentityKey, newId)
 		await query({
@@ -251,6 +259,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const executeUSyncQuery = async (usyncQuery: USyncQuery) => {
+		trace('socket', 'executeUSyncQuery:enter', { protocolsCount: usyncQuery.protocols.length, usersCount: usyncQuery.users.length })
 		if (usyncQuery.protocols.length === 0) {
 			throw new Boom('USyncQuery must have at least one protocol')
 		}
@@ -308,6 +317,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const onWhatsApp = async (...phoneNumber: string[]) => {
+		trace('socket', 'onWhatsApp:enter', { phoneNumbers: phoneNumber })
 		let usyncQuery = new USyncQuery()
 
 		let contactEnabled = false
@@ -412,6 +422,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	/** connection handshake */
 	const validateConnection = async () => {
+		trace('socket', 'validateConnection:enter', { hasMe: !!creds.me })
 		let helloMsg: proto.IHandshakeMessage = {
 			clientHello: { ephemeral: ephemeralKeyPair.public }
 		}
@@ -421,18 +432,23 @@ export const makeSocket = (config: SocketConfig) => {
 
 		const init = proto.HandshakeMessage.encode(helloMsg).finish()
 
+		trace('socket', 'validateConnection:clientHelloSent', { initLen: init.length })
 		const result = await awaitNextMessage<Uint8Array>(init)
+		trace('socket', 'validateConnection:serverHelloReceived', { resultLen: result.length })
 		const handshake = proto.HandshakeMessage.decode(result)
 
 		logger.trace({ handshake }, 'handshake recv from WA')
 
 		const keyEnc = await noise.processHandshake(handshake, creds.noiseKey)
+		trace('socket', 'validateConnection:handshakeProcessed', { keyEncLen: keyEnc.length })
 
 		let node: proto.IClientPayload
 		if (!creds.me) {
+			trace('socket', 'validateConnection:registration', {})
 			node = generateRegistrationNode(creds, config)
 			logger.info({ node }, 'not logged in, attempting registration...')
 		} else {
+			trace('socket', 'validateConnection:login', { meId: creds.me.id })
 			node = generateLoginNode(creds.me.id, config)
 			logger.info({ node }, 'logging in...')
 		}
@@ -447,6 +463,7 @@ export const makeSocket = (config: SocketConfig) => {
 			}).finish()
 		)
 		await noise.finishInit()
+		trace('socket', 'validateConnection:noiseFinished', {})
 		startKeepAliveRequest()
 	}
 
@@ -471,6 +488,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	/** generates and uploads a set of pre-keys to the server */
 	const uploadPreKeys = async (count = MIN_PREKEY_COUNT, retryCount = 0) => {
+		trace('socket', 'uploadPreKeys:enter', { count, retryCount })
 		// Check minimum interval (except for retries)
 		if (retryCount === 0) {
 			const timeSinceLastUpload = Date.now() - lastUploadTime
@@ -578,6 +596,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const onMessageReceived = async (data: Buffer) => {
+		trace('socket', 'onMessageReceived', { dataLen: data.length })
 		await noise.decodeFrame(data, frame => {
 			// reset ping timeout
 			lastDateRecv = new Date()
@@ -588,6 +607,7 @@ export const makeSocket = (config: SocketConfig) => {
 			// if it's a binary node
 			if (!(frame instanceof Uint8Array)) {
 				const msgId = frame.attrs.id
+				trace('socket', 'onMessageReceived:binaryNode', { tag: frame.tag, msgId, type: frame.attrs?.type })
 
 				if (logger.level === 'trace') {
 					logger.trace({ xml: binaryNodeToString(frame), msg: 'recv xml' })
@@ -617,6 +637,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const end = async (error: Error | undefined) => {
+		trace('socket', 'end', { error: error?.message })
 		if (closed) {
 			logger.trace({ trace: error?.stack }, 'connection already closed')
 			return
@@ -717,6 +738,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	/** logout & invalidate connection */
 	const logout = async (msg?: string) => {
+		trace('socket', 'logout', { msg })
 		const jid = authState.creds.me?.id
 		if (jid) {
 			await sendNode({
@@ -743,6 +765,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const requestPairingCode = async (phoneNumber: string, customPairingCode?: string): Promise<string> => {
+		trace('socket', 'requestPairingCode:enter', { phoneNumber, hasCustomCode: !!customPairingCode })
 		const pairingCode = customPairingCode ?? bytesToCrockford(randomBytes(5))
 
 		if (customPairingCode && customPairingCode?.length !== 8) {
@@ -807,6 +830,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	async function generatePairingKey() {
+		trace('socket', 'generatePairingKey:enter', {})
 		const salt = randomBytes(32)
 		const randomIv = randomBytes(16)
 		const key = await derivePairingCodeKey(authState.creds.pairingCode!, salt)
@@ -835,6 +859,7 @@ export const makeSocket = (config: SocketConfig) => {
 	ws.on('message', onMessageReceived)
 
 	ws.on('open', async () => {
+		trace('socket', 'ws:open', {})
 		try {
 			await validateConnection()
 		} catch (err: any) {
@@ -851,6 +876,7 @@ export const makeSocket = (config: SocketConfig) => {
 	)
 	// QR gen
 	ws.on('CB:iq,type:set,pair-device', async (stanza: BinaryNode) => {
+		trace('socket', 'CB:pair-device', { stanzaId: stanza.attrs.id })
 		const iq: BinaryNode = {
 			tag: 'iq',
 			attrs: {
@@ -881,7 +907,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 			const ref = (refNode.content as Buffer).toString('utf-8')
 			const qr = [ref, noiseKeyB64, identityKeyB64, advB64].join(',')
-
+			trace('socket', 'genPairQR:emit', { refLen: ref.length })
 			ev.emit('connection.update', { qr })
 
 			qrTimer = setTimeout(genPairQR, qrMs)
@@ -893,10 +919,31 @@ export const makeSocket = (config: SocketConfig) => {
 	// device paired for the first time
 	// if device pairs successfully, the server asks to restart the connection
 	ws.on('CB:iq,,pair-success', async (stanza: BinaryNode) => {
+		trace('socket', 'CB:pair-success', { stanzaId: stanza.attrs.id })
 		logger.debug('pair success recv')
 		try {
-			const { reply, creds: updatedCreds } = configureSuccessfulPairing(stanza, creds)
+			const pairSuccessNode = getBinaryNodeChild(stanza, 'pair-success')
+			const deviceIdentityNode = getBinaryNodeChild(pairSuccessNode, 'device-identity')
+			const platformNode = getBinaryNodeChild(pairSuccessNode, 'platform')
+			const deviceNode = getBinaryNodeChild(pairSuccessNode, 'device')
+			const businessNode = getBinaryNodeChild(pairSuccessNode, 'biz') || null
 
+			if (!deviceIdentityNode || !deviceNode) {
+				throw new Boom('Missing device-identity or device in pair success node', { data: stanza })
+			}
+
+			const { reply, creds: updatedCreds } = configureSuccessfulPairing(
+				businessNode,
+				platformNode || null,
+				deviceNode,
+				deviceIdentityNode,
+				stanza.attrs.id || '',
+				creds.advSecretKey,
+				creds.signedIdentityKey,
+				creds.signalIdentities
+			)
+
+			trace('socket', 'pair-success:configured', { me: updatedCreds.me?.id, platform: updatedCreds.platform })
 			logger.info(
 				{ me: updatedCreds.me, platform: updatedCreds.platform },
 				'pairing configured successfully, expect to restart the connection...'
@@ -913,6 +960,7 @@ export const makeSocket = (config: SocketConfig) => {
 	})
 	// login complete
 	ws.on('CB:success', async (node: BinaryNode) => {
+		trace('socket', 'CB:success', { lid: node.attrs?.lid })
 		try {
 			await uploadPreKeysToServerIfRequired()
 			await sendPassiveIq('active')
@@ -963,6 +1011,7 @@ export const makeSocket = (config: SocketConfig) => {
 	})
 
 	ws.on('CB:stream:error', (node: BinaryNode) => {
+		trace('socket', 'CB:stream:error', { attrs: node.attrs })
 		const [reasonNode] = getAllBinaryNodeChildren(node)
 		logger.error({ reasonNode, fullErrorNode: node }, 'stream errored out')
 
@@ -972,6 +1021,7 @@ export const makeSocket = (config: SocketConfig) => {
 	})
 	// stream fail, possible logout
 	ws.on('CB:failure', (node: BinaryNode) => {
+		trace('socket', 'CB:failure', { reason: node.attrs?.reason })
 		const reason = +(node.attrs.reason || 500)
 		void end(new Boom('Connection Failure', { statusCode: reason, data: node.attrs }))
 	})

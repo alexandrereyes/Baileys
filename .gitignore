@@ -19,3 +19,10 @@ test.ts
 TestData
 wa-logs*
 coverage
+
+# Trace session artifacts
+auth_test/
+trace_auth_info/
+test_*.js
+test_*.ts
+package-lock.json

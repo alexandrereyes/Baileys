@@ -33,6 +33,7 @@ import { aesDecryptGCM, hmacSign } from './crypto'
 import { getKeyAuthor, toNumber } from './generics'
 import { downloadAndProcessHistorySyncNotification } from './history'
 import type { ILogger } from './logger'
+import { trace } from './trace-logger'
 
 type ProcessMessageContext = {
 	shouldProcessHistoryMsg: boolean
@@ -57,6 +58,7 @@ const REAL_MSG_REQ_ME_STUB_TYPES = new Set([WAMessageStubType.GROUP_PARTICIPANT_
 
 /** Cleans a received message to further processing */
 export const cleanMessage = (message: WAMessage, meId: string, meLid: string) => {
+	trace('process-message', 'cleanMessage:enter', { messageId: message.key.id, remoteJid: message.key.remoteJid })
 	// ensure remoteJid and participant doesn't have device or agent in it
 	if (isHostedPnUser(message.key.remoteJid!) || isHostedLidUser(message.key.remoteJid!)) {
 		message.key.remoteJid = jidEncode(
@@ -105,13 +107,15 @@ export const cleanMessage = (message: WAMessage, meId: string, meLid: string) =>
 			msgKey.participant = msgKey.participant || message.key.participant
 		}
 	}
+	trace('process-message', 'cleanMessage:return', {})
 }
 
 // TODO: target:audit AUDIT THIS FUNCTION AGAIN
 export const isRealMessage = (message: WAMessage) => {
+	trace('process-message', 'isRealMessage:enter', { messageId: message.key.id, messageStubType: message.messageStubType })
 	const normalizedContent = normalizeMessageContent(message.message)
 	const hasSomeContent = !!getContentType(normalizedContent)
-	return (
+	const result = (
 		(!!normalizedContent ||
 			REAL_MSG_STUB_TYPES.has(message.messageStubType!) ||
 			REAL_MSG_REQ_ME_STUB_TYPES.has(message.messageStubType!)) &&
@@ -120,20 +124,31 @@ export const isRealMessage = (message: WAMessage) => {
 		!normalizedContent?.reactionMessage &&
 		!normalizedContent?.pollUpdateMessage
 	)
+	trace('process-message', 'isRealMessage:return', { isReal: result })
+	return result
 }
 
-export const shouldIncrementChatUnread = (message: WAMessage) => !message.key.fromMe && !message.messageStubType
+export const shouldIncrementChatUnread = (message: WAMessage) => {
+	trace('process-message', 'shouldIncrementChatUnread:enter', { messageId: message.key.id, fromMe: message.key.fromMe })
+	const result = !message.key.fromMe && !message.messageStubType
+	trace('process-message', 'shouldIncrementChatUnread:return', { increment: result })
+	return result
+}
 
 /**
  * Get the ID of the chat from the given key.
  * Typically -- that'll be the remoteJid, but for broadcasts, it'll be the participant
  */
 export const getChatId = ({ remoteJid, participant, fromMe }: WAMessageKey) => {
+	trace('process-message', 'getChatId:enter', { remoteJid, participant, fromMe })
+	let result: string
 	if (isJidBroadcast(remoteJid!) && !isJidStatusBroadcast(remoteJid!) && !fromMe) {
-		return participant!
+		result = participant!
+	} else {
+		result = remoteJid!
 	}
-
-	return remoteJid!
+	trace('process-message', 'getChatId:return', { chatId: result })
+	return result
 }
 
 type PollContext = {
@@ -168,6 +183,7 @@ export function decryptPollVote(
 	{ encPayload, encIv }: proto.Message.IPollEncValue,
 	{ pollCreatorJid, pollMsgId, pollEncKey, voterJid }: PollContext
 ) {
+	trace('process-message', 'decryptPollVote:enter', { pollMsgId, pollCreatorJid, voterJid, encPayloadLength: encPayload?.length, encIvLength: encIv?.length })
 	const sign = Buffer.concat([
 		toBinary(pollMsgId),
 		toBinary(pollCreatorJid),
@@ -181,7 +197,9 @@ export function decryptPollVote(
 	const aad = toBinary(`${pollMsgId}\u0000${voterJid}`)
 
 	const decrypted = aesDecryptGCM(encPayload!, decKey, encIv!, aad)
-	return proto.Message.PollVoteMessage.decode(decrypted)
+	const result = proto.Message.PollVoteMessage.decode(decrypted)
+	trace('process-message', 'decryptPollVote:return', {})
+	return result
 
 	function toBinary(txt: string) {
 		return Buffer.from(txt)
@@ -198,6 +216,7 @@ export function decryptEventResponse(
 	{ encPayload, encIv }: proto.Message.IPollEncValue,
 	{ eventCreatorJid, eventMsgId, eventEncKey, responderJid }: EventContext
 ) {
+	trace('process-message', 'decryptEventResponse:enter', { eventMsgId, eventCreatorJid, responderJid, encPayloadLength: encPayload?.length, encIvLength: encIv?.length })
 	const sign = Buffer.concat([
 		toBinary(eventMsgId),
 		toBinary(eventCreatorJid),
@@ -211,7 +230,9 @@ export function decryptEventResponse(
 	const aad = toBinary(`${eventMsgId}\u0000${responderJid}`)
 
 	const decrypted = aesDecryptGCM(encPayload!, decKey, encIv!, aad)
-	return proto.Message.EventResponseMessage.decode(decrypted)
+	const result = proto.Message.EventResponseMessage.decode(decrypted)
+	trace('process-message', 'decryptEventResponse:return', {})
+	return result
 
 	function toBinary(txt: string) {
 		return Buffer.from(txt)
@@ -232,6 +253,7 @@ const processMessage = async (
 		getMessage
 	}: ProcessMessageContext
 ) => {
+	trace('process-message', 'processMessage:enter', { messageId: message.key.id, fromMe: message.key.fromMe, messageStubType: message.messageStubType })
 	const meId = creds.me!.id
 	const { accountSettings } = creds
 
@@ -260,6 +282,7 @@ const processMessage = async (
 	if (protocolMsg) {
 		switch (protocolMsg.type) {
 			case proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION:
+				trace('process-message', 'processMessage:historySync', { messageId: message.key.id })
 				const histNotification = protocolMsg.historySyncNotification!
 				const process = shouldProcessHistoryMsg
 				const isLatest = !creds.processedHistoryMessages?.length
@@ -306,6 +329,7 @@ const processMessage = async (
 
 				break
 			case proto.Message.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE:
+				trace('process-message', 'processMessage:appStateSyncKeyShare', { keysCount: protocolMsg.appStateSyncKeyShare?.keys?.length })
 				const keys = protocolMsg.appStateSyncKeyShare!.keys
 				if (keys?.length) {
 					let newAppStateSyncKeyId = ''
@@ -330,6 +354,7 @@ const processMessage = async (
 
 				break
 			case proto.Message.ProtocolMessage.Type.REVOKE:
+				trace('process-message', 'processMessage:revoke', { revokedId: protocolMsg.key?.id })
 				ev.emit('messages.update', [
 					{
 						key: {
@@ -341,12 +366,14 @@ const processMessage = async (
 				])
 				break
 			case proto.Message.ProtocolMessage.Type.EPHEMERAL_SETTING:
+				trace('process-message', 'processMessage:ephemeralSetting', { expiration: protocolMsg.ephemeralExpiration })
 				Object.assign(chat, {
 					ephemeralSettingTimestamp: toNumber(message.messageTimestamp),
 					ephemeralExpiration: protocolMsg.ephemeralExpiration || null
 				})
 				break
 			case proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE:
+				trace('process-message', 'processMessage:peerDataResponse', { stanzaId: protocolMsg.peerDataOperationRequestResponseMessage?.stanzaId })
 				const response = protocolMsg.peerDataOperationRequestResponseMessage!
 				if (response) {
 					await placeholderResendCache?.del(response.stanzaId!)
@@ -370,6 +397,7 @@ const processMessage = async (
 
 				break
 			case proto.Message.ProtocolMessage.Type.MESSAGE_EDIT:
+				trace('process-message', 'processMessage:messageEdit', { editedId: protocolMsg.key?.id })
 				ev.emit('messages.update', [
 					{
 						// flip the sender / fromMe properties because they're in the perspective of the sender
@@ -388,6 +416,7 @@ const processMessage = async (
 				])
 				break
 			case proto.Message.ProtocolMessage.Type.GROUP_MEMBER_LABEL_CHANGE:
+				trace('process-message', 'processMessage:groupMemberLabelChange', { groupId: chat.id })
 				const labelAssociationMsg = protocolMsg.memberLabel
 				if (labelAssociationMsg?.label) {
 					ev.emit('group.member-tag.update', {
@@ -401,6 +430,7 @@ const processMessage = async (
 
 				break
 			case proto.Message.ProtocolMessage.Type.LID_MIGRATION_MAPPING_SYNC:
+				trace('process-message', 'processMessage:lidMappingSync', { chatId: chat.id })
 				const encodedPayload = protocolMsg.lidMigrationMappingSyncMessage?.encodedMappingPayload!
 				const { pnToLidMappings, chatDbMigrationTimestamp } =
 					proto.LIDMigrationMappingSyncPayload.decode(encodedPayload)
@@ -419,6 +449,7 @@ const processMessage = async (
 				}
 		}
 	} else if (content?.reactionMessage) {
+		trace('process-message', 'processMessage:reaction', { messageId: message.key.id })
 		const reaction: proto.IReaction = {
 			...content.reactionMessage,
 			key: message.key
@@ -430,6 +461,7 @@ const processMessage = async (
 			}
 		])
 	} else if (content?.encEventResponseMessage) {
+		trace('process-message', 'processMessage:eventResponse', { messageId: message.key.id })
 		const encEventResponse = content.encEventResponseMessage
 		const creationMsgKey = encEventResponse.eventCreationMessageKey!
 
@@ -484,6 +516,7 @@ const processMessage = async (
 			logger?.warn({ creationMsgKey }, 'event creation message not found, cannot decrypt response')
 		}
 	} else if (message.messageStubType) {
+		trace('process-message', 'processMessage:messageStub', { stubType: message.messageStubType, chatId: chat.id })
 		const jid = message.key?.remoteJid!
 		//let actor = whatsappID (message.participant)
 		let participants: GroupParticipant[]
@@ -517,11 +550,13 @@ const processMessage = async (
 
 		switch (message.messageStubType) {
 			case WAMessageStubType.GROUP_PARTICIPANT_CHANGE_NUMBER:
+				trace('process-message', 'processMessage:stubChangeNumber', { jid })
 				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
 				emitParticipantsUpdate('modify')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_LEAVE:
 			case WAMessageStubType.GROUP_PARTICIPANT_REMOVE:
+				trace('process-message', 'processMessage:stubRemove', { jid })
 				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
 				emitParticipantsUpdate('remove')
 				// mark the chat read only if you left the group
@@ -533,6 +568,7 @@ const processMessage = async (
 			case WAMessageStubType.GROUP_PARTICIPANT_ADD:
 			case WAMessageStubType.GROUP_PARTICIPANT_INVITE:
 			case WAMessageStubType.GROUP_PARTICIPANT_ADD_REQUEST_JOIN:
+				trace('process-message', 'processMessage:stubAdd', { jid })
 				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
 				if (participantsIncludesMe()) {
 					chat.readOnly = false
@@ -541,44 +577,54 @@ const processMessage = async (
 				emitParticipantsUpdate('add')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_DEMOTE:
+				trace('process-message', 'processMessage:stubDemote', { jid })
 				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
 				emitParticipantsUpdate('demote')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_PROMOTE:
+				trace('process-message', 'processMessage:stubPromote', { jid })
 				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
 				emitParticipantsUpdate('promote')
 				break
 			case WAMessageStubType.GROUP_CHANGE_ANNOUNCE:
+				trace('process-message', 'processMessage:stubChangeAnnounce', { jid })
 				const announceValue = message.messageStubParameters?.[0]
 				emitGroupUpdate({ announce: announceValue === 'true' || announceValue === 'on' })
 				break
 			case WAMessageStubType.GROUP_CHANGE_RESTRICT:
+				trace('process-message', 'processMessage:stubChangeRestrict', { jid })
 				const restrictValue = message.messageStubParameters?.[0]
 				emitGroupUpdate({ restrict: restrictValue === 'true' || restrictValue === 'on' })
 				break
 			case WAMessageStubType.GROUP_CHANGE_SUBJECT:
+				trace('process-message', 'processMessage:stubChangeSubject', { jid })
 				const name = message.messageStubParameters?.[0]
 				chat.name = name
 				emitGroupUpdate({ subject: name })
 				break
 			case WAMessageStubType.GROUP_CHANGE_DESCRIPTION:
+				trace('process-message', 'processMessage:stubChangeDescription', { jid })
 				const description = message.messageStubParameters?.[0]
 				chat.description = description
 				emitGroupUpdate({ desc: description })
 				break
 			case WAMessageStubType.GROUP_CHANGE_INVITE_LINK:
+				trace('process-message', 'processMessage:stubChangeInviteLink', { jid })
 				const code = message.messageStubParameters?.[0]
 				emitGroupUpdate({ inviteCode: code })
 				break
 			case WAMessageStubType.GROUP_MEMBER_ADD_MODE:
+				trace('process-message', 'processMessage:stubMemberAddMode', { jid })
 				const memberAddValue = message.messageStubParameters?.[0]
 				emitGroupUpdate({ memberAddMode: memberAddValue === 'all_member_add' })
 				break
 			case WAMessageStubType.GROUP_MEMBERSHIP_JOIN_APPROVAL_MODE:
+				trace('process-message', 'processMessage:stubJoinApprovalMode', { jid })
 				const approvalMode = message.messageStubParameters?.[0]
 				emitGroupUpdate({ joinApprovalMode: approvalMode === 'on' })
 				break
 			case WAMessageStubType.GROUP_MEMBERSHIP_JOIN_APPROVAL_REQUEST_NON_ADMIN_ADD: // TODO: Add other events
+				trace('process-message', 'processMessage:stubJoinRequest', { jid })
 				const participant = JSON.parse(message.messageStubParameters?.[0]) as LIDMapping
 				const action = message.messageStubParameters?.[1] as RequestJoinAction
 				const method = message.messageStubParameters?.[2] as RequestJoinMethod
@@ -638,6 +684,7 @@ const processMessage = async (
 	if (Object.keys(chat).length > 1) {
 		ev.emit('chats.update', [chat])
 	}
+	trace('process-message', 'processMessage:return', { chatId: chat.id, hasUpdate: Object.keys(chat).length > 1 })
 }
 
 export default processMessage

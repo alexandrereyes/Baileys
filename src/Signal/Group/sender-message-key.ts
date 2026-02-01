@@ -1,4 +1,5 @@
 import { deriveSecrets } from 'libsignal/src/crypto'
+import { trace } from '../../Utils/trace-logger'
 
 export class SenderMessageKey {
 	private readonly iteration: number
@@ -7,6 +8,7 @@ export class SenderMessageKey {
 	private readonly seed: Uint8Array
 
 	constructor(iteration: number, seed: Uint8Array) {
+		trace('sender-message-key', 'SenderMessageKey.constructor', { iteration, seedLen: seed.length })
 		const derivative = deriveSecrets(seed, Buffer.alloc(32), Buffer.from('WhisperGroup'))
 		const keys = new Uint8Array(32)
 		keys.set(new Uint8Array(derivative[0].slice(16)))

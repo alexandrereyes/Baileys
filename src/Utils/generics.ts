@@ -13,6 +13,7 @@ import type {
 import { DisconnectReason } from '../Types'
 import { type BinaryNode, getAllBinaryNodeChildren, jidDecode } from '../WABinary'
 import { sha256 } from './crypto'
+import { trace } from './trace-logger'
 
 export const BufferJSON = {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,48 +45,76 @@ export const BufferJSON = {
 	}
 }
 
-export const getKeyAuthor = (key: WAMessageKey | undefined | null, meId = 'me') =>
-	(key?.fromMe ? meId : key?.participantAlt || key?.remoteJidAlt || key?.participant || key?.remoteJid) || ''
+export const getKeyAuthor = (key: WAMessageKey | undefined | null, meId = 'me') => {
+	trace('generics', 'getKeyAuthor:enter', { hasKey: !!key, fromMe: key?.fromMe, meId })
+	const result = (key?.fromMe ? meId : key?.participantAlt || key?.remoteJidAlt || key?.participant || key?.remoteJid) || ''
+	trace('generics', 'getKeyAuthor:return', { result })
+	return result
+}
 
-export const isStringNullOrEmpty = (value: string | null | undefined): value is null | undefined | '' =>
-	// eslint-disable-next-line eqeqeq
-	value == null || value === ''
+export const isStringNullOrEmpty = (value: string | null | undefined): value is null | undefined | '' => {
+	const result = value == null || value === ''
+	return result
+}
 
 export const writeRandomPadMax16 = (msg: Uint8Array) => {
+	trace('generics', 'writeRandomPadMax16:enter', { msgLen: msg.length })
 	const pad = randomBytes(1)
 	const padLength = (pad[0]! & 0x0f) + 1
 
-	return Buffer.concat([msg, Buffer.alloc(padLength, padLength)])
+	const result = Buffer.concat([msg, Buffer.alloc(padLength, padLength)])
+	trace('generics', 'writeRandomPadMax16:return', { resultLen: result.length, padLength })
+	return result
 }
 
 export const unpadRandomMax16 = (e: Uint8Array | Buffer) => {
-	const t = new Uint8Array(e)
-	if (0 === t.length) {
-		throw new Error('unpadPkcs7 given empty bytes')
-	}
+	try {
+		trace('generics', 'unpadRandomMax16:enter', { len: e.length })
+		const t = new Uint8Array(e)
+		if (0 === t.length) {
+			throw new Error('unpadPkcs7 given empty bytes')
+		}
 
-	var r = t[t.length - 1]!
-	if (r > t.length) {
-		throw new Error(`unpad given ${t.length} bytes, but pad is ${r}`)
-	}
+		var r = t[t.length - 1]!
+		if (r > t.length) {
+			throw new Error(`unpad given ${t.length} bytes, but pad is ${r}`)
+		}
 
-	return new Uint8Array(t.buffer, t.byteOffset, t.length - r)
+		const result = new Uint8Array(t.buffer, t.byteOffset, t.length - r)
+		trace('generics', 'unpadRandomMax16:return', { resultLen: result.length, padLen: r })
+		return result
+	} catch (error) {
+		trace('generics', 'unpadRandomMax16:error', { error: (error as Error).message })
+		throw error
+	}
 }
 
 // code is inspired by whatsmeow
 export const generateParticipantHashV2 = (participants: string[]): string => {
+	trace('generics', 'generateParticipantHashV2:enter', { participantCount: participants.length })
 	participants.sort()
 	const sha256Hash = sha256(Buffer.from(participants.join(''))).toString('base64')
-	return '2:' + sha256Hash.slice(0, 6)
+	const result = '2:' + sha256Hash.slice(0, 6)
+	trace('generics', 'generateParticipantHashV2:return', { result })
+	return result
 }
 
-export const encodeWAMessage = (message: proto.IMessage) => writeRandomPadMax16(proto.Message.encode(message).finish())
+export const encodeWAMessage = (message: proto.IMessage) => {
+	trace('generics', 'encodeWAMessage:enter', {})
+	const result = writeRandomPadMax16(proto.Message.encode(message).finish())
+	trace('generics', 'encodeWAMessage:return', { resultLen: result.length })
+	return result
+}
 
 export const generateRegistrationId = (): number => {
-	return Uint16Array.from(randomBytes(2))[0]! & 16383
+	trace('generics', 'generateRegistrationId:enter', {})
+	const result = Uint16Array.from(randomBytes(2))[0]! & 16383
+	trace('generics', 'generateRegistrationId:return', { result })
+	return result
 }
 
 export const encodeBigEndian = (e: number, t = 4) => {
+	trace('generics', 'encodeBigEndian:enter', { value: e, bytes: t })
 	let r = e
 	const a = new Uint8Array(t)
 	for (let i = t - 1; i >= 0; i--) {
@@ -93,38 +122,50 @@ export const encodeBigEndian = (e: number, t = 4) => {
 		r >>>= 8
 	}
 
+	trace('generics', 'encodeBigEndian:return', { resultLen: a.length })
 	return a
 }
 
-export const toNumber = (t: Long | number | null | undefined): number =>
-	typeof t === 'object' && t ? ('toNumber' in t ? t.toNumber() : (t as Long).low) : t || 0
+export const toNumber = (t: Long | number | null | undefined): number => {
+	const result = typeof t === 'object' && t ? ('toNumber' in t ? t.toNumber() : (t as Long).low) : t || 0
+	return result
+}
 
 /** unix timestamp of a date in seconds */
-export const unixTimestampSeconds = (date: Date = new Date()) => Math.floor(date.getTime() / 1000)
+export const unixTimestampSeconds = (date: Date = new Date()) => {
+	const result = Math.floor(date.getTime() / 1000)
+	return result
+}
 
 export type DebouncedTimeout = ReturnType<typeof debouncedTimeout>
 
 export const debouncedTimeout = (intervalMs = 1000, task?: () => void) => {
+	trace('generics', 'debouncedTimeout:enter', { intervalMs, hasTask: !!task })
 	let timeout: NodeJS.Timeout | undefined
-	return {
+	const result = {
 		start: (newIntervalMs?: number, newTask?: () => void) => {
+			trace('generics', 'debouncedTimeout.start:enter', { newIntervalMs, hasNewTask: !!newTask })
 			task = newTask || task
 			intervalMs = newIntervalMs || intervalMs
 			timeout && clearTimeout(timeout)
 			timeout = setTimeout(() => task?.(), intervalMs)
 		},
 		cancel: () => {
+			trace('generics', 'debouncedTimeout.cancel:enter', {})
 			timeout && clearTimeout(timeout)
 			timeout = undefined
 		},
 		setTask: (newTask: () => void) => (task = newTask),
 		setInterval: (newInterval: number) => (intervalMs = newInterval)
 	}
+	trace('generics', 'debouncedTimeout:return', {})
+	return result
 }
 
 export const delay = (ms: number) => delayCancellable(ms).delay
 
 export const delayCancellable = (ms: number) => {
+	trace('generics', 'delayCancellable:enter', { ms })
 	const stack = new Error().stack
 	let timeout: NodeJS.Timeout
 	let reject: (error: any) => void
@@ -133,6 +174,7 @@ export const delayCancellable = (ms: number) => {
 		reject = _reject
 	})
 	const cancel = () => {
+		trace('generics', 'delayCancellable.cancel:enter', {})
 		clearTimeout(timeout)
 		reject(
 			new Boom('Cancelled', {
@@ -144,6 +186,7 @@ export const delayCancellable = (ms: number) => {
 		)
 	}
 
+	trace('generics', 'delayCancellable:return', {})
 	return { delay, cancel }
 }
 
@@ -151,6 +194,7 @@ export async function promiseTimeout<T>(
 	ms: number | undefined,
 	promise: (resolve: (v: T) => void, reject: (error: any) => void) => void
 ) {
+	trace('generics', 'promiseTimeout:enter', { ms })
 	if (!ms) {
 		return new Promise(promise)
 	}
@@ -174,12 +218,14 @@ export async function promiseTimeout<T>(
 
 		promise(resolve, reject)
 	}).finally(cancel)
+	trace('generics', 'promiseTimeout:return', { hasTimeout: !!ms })
 	return p as Promise<T>
 }
 
 // inspired from whatsmeow code
 // https://github.com/tulir/whatsmeow/blob/64bc969fbe78d31ae0dd443b8d4c80a5d026d07a/send.go#L42
 export const generateMessageIDV2 = (userId?: string): string => {
+	trace('generics', 'generateMessageIDV2:enter', { hasUserId: !!userId })
 	const data = Buffer.alloc(8 + 20 + 16)
 	data.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000)))
 
@@ -195,19 +241,28 @@ export const generateMessageIDV2 = (userId?: string): string => {
 	random.copy(data, 28)
 
 	const hash = createHash('sha256').update(data).digest()
-	return '3EB0' + hash.toString('hex').toUpperCase().substring(0, 18)
+	const result = '3EB0' + hash.toString('hex').toUpperCase().substring(0, 18)
+	trace('generics', 'generateMessageIDV2:return', { result })
+	return result
 }
 
 // generate a random ID to attach to a message
-export const generateMessageID = () => '3EB0' + randomBytes(18).toString('hex').toUpperCase()
+export const generateMessageID = () => {
+	trace('generics', 'generateMessageID:enter', {})
+	const result = '3EB0' + randomBytes(18).toString('hex').toUpperCase()
+	trace('generics', 'generateMessageID:return', { result })
+	return result
+}
 
 export function bindWaitForEvent<T extends keyof BaileysEventMap>(ev: BaileysEventEmitter, event: T) {
+	trace('generics', 'bindWaitForEvent:enter', { event })
 	return async (check: (u: BaileysEventMap[T]) => Promise<boolean | undefined>, timeoutMs?: number) => {
 		let listener: (item: BaileysEventMap[T]) => void
 		let closeListener: (state: Partial<ConnectionState>) => void
 		await promiseTimeout<void>(timeoutMs, (resolve, reject) => {
 			closeListener = ({ connection, lastDisconnect }) => {
 				if (connection === 'close') {
+					trace('generics', 'bindWaitForEvent:error', { error: 'Connection closed' })
 					reject(
 						lastDisconnect?.error || new Boom('Connection Closed', { statusCode: DisconnectReason.connectionClosed })
 					)
@@ -236,6 +291,7 @@ export const bindWaitForConnectionUpdate = (ev: BaileysEventEmitter) => bindWait
  * Use to ensure your WA connection is always on the latest version
  */
 export const fetchLatestBaileysVersion = async (options: RequestInit = {}) => {
+	trace('generics', 'fetchLatestBaileysVersion:enter', {})
 	const URL = 'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/index.ts'
 	try {
 		const response = await fetch(URL, {
@@ -256,6 +312,7 @@ export const fetchLatestBaileysVersion = async (options: RequestInit = {}) => {
 		if (versionMatch) {
 			const version = [parseInt(versionMatch[1]!), parseInt(versionMatch[2]!), parseInt(versionMatch[3]!)] as WAVersion
 
+			trace('generics', 'fetchLatestBaileysVersion:return', { isLatest: true, version })
 			return {
 				version,
 				isLatest: true
@@ -264,6 +321,7 @@ export const fetchLatestBaileysVersion = async (options: RequestInit = {}) => {
 			throw new Error('Could not parse version from Defaults/index.ts')
 		}
 	} catch (error) {
+		trace('generics', 'fetchLatestBaileysVersion:error', { error: (error as Error).message })
 		return {
 			version: baileysVersion as WAVersion,
 			isLatest: false,
@@ -277,6 +335,7 @@ export const fetchLatestBaileysVersion = async (options: RequestInit = {}) => {
  * Use to ensure your WA connection is always on the latest version
  */
 export const fetchLatestWaWebVersion = async (options: RequestInit = {}) => {
+	trace('generics', 'fetchLatestWaWebVersion:enter', {})
 	try {
 		// Absolute minimal headers required to bypass anti-bot detection
 		const defaultHeaders = {
@@ -303,6 +362,7 @@ export const fetchLatestWaWebVersion = async (options: RequestInit = {}) => {
 		const match = data.match(regex)
 
 		if (!match?.[1]) {
+			trace('generics', 'fetchLatestWaWebVersion:return', { isLatest: false, error: 'No client revision found' })
 			return {
 				version: baileysVersion as WAVersion,
 				isLatest: false,
@@ -314,11 +374,13 @@ export const fetchLatestWaWebVersion = async (options: RequestInit = {}) => {
 
 		const clientRevision = match[1]
 
+		trace('generics', 'fetchLatestWaWebVersion:return', { isLatest: true, clientRevision })
 		return {
 			version: [2, 3000, +clientRevision] as WAVersion,
 			isLatest: true
 		}
 	} catch (error) {
+		trace('generics', 'fetchLatestWaWebVersion:error', { error: (error as Error).message })
 		return {
 			version: baileysVersion as WAVersion,
 			isLatest: false,
@@ -329,8 +391,11 @@ export const fetchLatestWaWebVersion = async (options: RequestInit = {}) => {
 
 /** unique message tag prefix for MD clients */
 export const generateMdTagPrefix = () => {
+	trace('generics', 'generateMdTagPrefix:enter', {})
 	const bytes = randomBytes(4)
-	return `${bytes.readUInt16BE()}.${bytes.readUInt16BE(2)}-`
+	const result = `${bytes.readUInt16BE()}.${bytes.readUInt16BE(2)}-`
+	trace('generics', 'generateMdTagPrefix:return', { result })
+	return result
 }
 
 const STATUS_MAP: { [_: string]: proto.WebMessageInfo.Status } = {
@@ -344,11 +409,14 @@ const STATUS_MAP: { [_: string]: proto.WebMessageInfo.Status } = {
  * @param type type from receipt
  */
 export const getStatusFromReceiptType = (type: string | undefined) => {
+	trace('generics', 'getStatusFromReceiptType:enter', { type })
 	const status = STATUS_MAP[type!]
 	if (typeof type === 'undefined') {
+		trace('generics', 'getStatusFromReceiptType:return', { status: 'DELIVERY_ACK' })
 		return proto.WebMessageInfo.Status.DELIVERY_ACK
 	}
 
+	trace('generics', 'getStatusFromReceiptType:return', { status })
 	return status
 }
 
@@ -361,6 +429,7 @@ const CODE_MAP: { [_: string]: DisconnectReason } = {
  * @param reason the string reason given, eg. "conflict"
  */
 export const getErrorCodeFromStreamError = (node: BinaryNode) => {
+	trace('generics', 'getErrorCodeFromStreamError:enter', { tag: node.tag })
 	const [reasonNode] = getAllBinaryNodeChildren(node)
 	let reason = reasonNode?.tag || 'unknown'
 	const statusCode = +(node.attrs.code || CODE_MAP[reason] || DisconnectReason.badSession)
@@ -369,6 +438,7 @@ export const getErrorCodeFromStreamError = (node: BinaryNode) => {
 		reason = 'restart required'
 	}
 
+	trace('generics', 'getErrorCodeFromStreamError:return', { reason, statusCode })
 	return {
 		reason,
 		statusCode
@@ -376,6 +446,7 @@ export const getErrorCodeFromStreamError = (node: BinaryNode) => {
 }
 
 export const getCallStatusFromNode = ({ tag, attrs }: BinaryNode) => {
+	trace('generics', 'getCallStatusFromNode:enter', { tag, reason: attrs?.reason })
 	let status: WACallUpdateType
 	switch (tag) {
 		case 'offer':
@@ -402,12 +473,14 @@ export const getCallStatusFromNode = ({ tag, attrs }: BinaryNode) => {
 			break
 	}
 
+	trace('generics', 'getCallStatusFromNode:return', { status })
 	return status
 }
 
 const UNEXPECTED_SERVER_CODE_TEXT = 'Unexpected server response: '
 
 export const getCodeFromWSError = (error: Error) => {
+	trace('generics', 'getCodeFromWSError:enter', { message: error?.message })
 	let statusCode = 500
 	if (error?.message?.includes(UNEXPECTED_SERVER_CODE_TEXT)) {
 		const code = +error?.message.slice(UNEXPECTED_SERVER_CODE_TEXT.length)
@@ -423,6 +496,7 @@ export const getCodeFromWSError = (error: Error) => {
 		statusCode = 408
 	}
 
+	trace('generics', 'getCodeFromWSError:return', { statusCode })
 	return statusCode
 }
 
@@ -431,7 +505,10 @@ export const getCodeFromWSError = (error: Error) => {
  * @param platform AuthenticationCreds.platform
  */
 export const isWABusinessPlatform = (platform: string) => {
-	return platform === 'smbi' || platform === 'smba'
+	trace('generics', 'isWABusinessPlatform:enter', { platform })
+	const result = platform === 'smbi' || platform === 'smba'
+	trace('generics', 'isWABusinessPlatform:return', { result })
+	return result
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -448,6 +525,7 @@ export function trimUndefined(obj: { [_: string]: any }) {
 const CROCKFORD_CHARACTERS = '123456789ABCDEFGHJKLMNPQRSTVWXYZ'
 
 export function bytesToCrockford(buffer: Buffer): string {
+	trace('generics', 'bytesToCrockford:enter', { bufferLen: buffer.length })
 	let value = 0
 	let bitCount = 0
 	const crockford: string[] = []
@@ -466,9 +544,14 @@ export function bytesToCrockford(buffer: Buffer): string {
 		crockford.push(CROCKFORD_CHARACTERS.charAt((value << (5 - bitCount)) & 31))
 	}
 
-	return crockford.join('')
+	const result = crockford.join('')
+	trace('generics', 'bytesToCrockford:return', { resultLen: result.length })
+	return result
 }
 
 export function encodeNewsletterMessage(message: proto.IMessage): Uint8Array {
-	return proto.Message.encode(message).finish()
+	trace('generics', 'encodeNewsletterMessage:enter', {})
+	const result = proto.Message.encode(message).finish()
+	trace('generics', 'encodeNewsletterMessage:return', { resultLen: result.length })
+	return result
 }

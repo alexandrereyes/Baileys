@@ -12,9 +12,11 @@ import { type BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET } from '
 import { Curve, hmacSign } from './crypto'
 import { encodeBigEndian } from './generics'
 import { createSignalIdentity } from './signal'
+import { trace } from './trace-logger'
 
 const getUserAgent = (config: SocketConfig): proto.ClientPayload.IUserAgent => {
-	return {
+	trace('validate-connection', 'getUserAgent:enter', { version: config.version })
+	const result = {
 		appVersion: {
 			primary: config.version[0],
 			secondary: config.version[1],
@@ -26,11 +28,12 @@ const getUserAgent = (config: SocketConfig): proto.ClientPayload.IUserAgent => {
 		device: 'Desktop',
 		osBuildNumber: '0.1',
 		localeLanguageIso6391: 'en',
-
 		mnc: '000',
 		mcc: '000',
 		localeCountryIso31661Alpha2: config.countryCode
 	}
+	trace('validate-connection', 'getUserAgent:return', {})
+	return result
 }
 
 const PLATFORM_MAP = {
@@ -64,6 +67,7 @@ const getClientPayload = (config: SocketConfig) => {
 }
 
 export const generateLoginNode = (userJid: string, config: SocketConfig): proto.IClientPayload => {
+	trace('validate-connection', 'generateLoginNode:enter', { userJid })
 	const { user, device } = jidDecode(userJid)!
 	const payload: proto.IClientPayload = {
 		...getClientPayload(config),
@@ -74,7 +78,9 @@ export const generateLoginNode = (userJid: string, config: SocketConfig): proto.
 		// TODO: investigate (hard set as false atm)
 		lidDbMigrated: false
 	}
-	return proto.ClientPayload.fromObject(payload)
+	const result = proto.ClientPayload.fromObject(payload)
+	trace('validate-connection', 'generateLoginNode:return', { user, device })
+	return result
 }
 
 const getPlatformType = (platform: string): proto.DeviceProps.PlatformType => {
@@ -89,6 +95,7 @@ export const generateRegistrationNode = (
 	{ registrationId, signedPreKey, signedIdentityKey }: SignalCreds,
 	config: SocketConfig
 ) => {
+	trace('validate-connection', 'generateRegistrationNode:enter', { registrationId, signedPreKeyId: signedPreKey.keyId })
 	// the app version needs to be md5 hashed
 	// and passed in
 	const appVersionBuf = createHash('md5')
@@ -141,30 +148,22 @@ export const generateRegistrationNode = (
 		}
 	}
 
-	return proto.ClientPayload.fromObject(registerPayload)
+	const result = proto.ClientPayload.fromObject(registerPayload)
+	trace('validate-connection', 'generateRegistrationNode:return', { appVersionLen: appVersionBuf.length })
+	return result
 }
 
 export const configureSuccessfulPairing = (
-	stanza: BinaryNode,
-	{
-		advSecretKey,
-		signedIdentityKey,
-		signalIdentities
-	}: Pick<AuthenticationCreds, 'advSecretKey' | 'signedIdentityKey' | 'signalIdentities'>
+	businessNode: BinaryNode | null,
+	platformNode: BinaryNode | null,
+	deviceNode: BinaryNode,
+	deviceIdentityNode: BinaryNode,
+	msgId: string,
+	advSecretKey: string,
+	signedIdentityKey: { public: Uint8Array; private: Uint8Array },
+	signalIdentities: any[] | undefined
 ) => {
-	const msgId = stanza.attrs.id
-
-	const pairSuccessNode = getBinaryNodeChild(stanza, 'pair-success')
-
-	const deviceIdentityNode = getBinaryNodeChild(pairSuccessNode, 'device-identity')
-	const platformNode = getBinaryNodeChild(pairSuccessNode, 'platform')
-	const deviceNode = getBinaryNodeChild(pairSuccessNode, 'device')
-	const businessNode = getBinaryNodeChild(pairSuccessNode, 'biz')
-
-	if (!deviceIdentityNode || !deviceNode) {
-		throw new Boom('Missing device-identity or device in pair success node', { data: stanza })
-	}
-
+	trace('validate-connection', 'configureSuccessfulPairing:enter', { jid: deviceNode.attrs.jid, lid: deviceNode.attrs.lid })
 	const bizName = businessNode?.attrs.name
 	const jid = deviceNode.attrs.jid
 	const lid = deviceNode.attrs.lid
@@ -235,6 +234,7 @@ export const configureSuccessfulPairing = (
 		platform: platformNode?.attrs.name
 	}
 
+	trace('validate-connection', 'configureSuccessfulPairing:return', { jid, lid, bizName, platform: platformNode?.attrs.name })
 	return {
 		creds: authUpdate,
 		reply
@@ -242,6 +242,7 @@ export const configureSuccessfulPairing = (
 }
 
 export const encodeSignedDeviceIdentity = (account: proto.IADVSignedDeviceIdentity, includeSignatureKey: boolean) => {
+	trace('validate-connection', 'encodeSignedDeviceIdentity:enter', { includeSignatureKey, hasSignatureKey: !!account.accountSignatureKey?.length })
 	account = { ...account }
 	// set to null if we are not to include the signature key
 	// or if we are including the signature key but it is empty
@@ -249,5 +250,7 @@ export const encodeSignedDeviceIdentity = (account: proto.IADVSignedDeviceIdenti
 		account.accountSignatureKey = null
 	}
 
-	return proto.ADVSignedDeviceIdentity.encode(account).finish()
+	const result = proto.ADVSignedDeviceIdentity.encode(account).finish()
+	trace('validate-connection', 'encodeSignedDeviceIdentity:return', { resultLen: result.length })
+	return result
 }

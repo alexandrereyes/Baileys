@@ -2,6 +2,7 @@ import { proto } from '../../WAProto/index.js'
 import type { BaileysEventEmitter, BaileysEventMap, Contact } from '../Types'
 import { isLidUser, isPnUser } from '../WABinary'
 import type { ILogger } from './logger'
+import { trace } from './trace-logger'
 
 export type ContactsUpsertResult = {
 	event: 'contacts.upsert'
@@ -24,6 +25,7 @@ export const processContactAction = (
 	id: string | undefined,
 	logger?: ILogger
 ): SyncActionResult[] => {
+	trace('sync-action-utils', 'processContactAction:enter', { id })
 	const results: SyncActionResult[] = []
 
 	if (!id) {
@@ -54,16 +56,19 @@ export const processContactAction = (
 
 	// Emit lid-mapping.update if we have valid LID-PN pair
 	if (lidJid && isLidUser(lidJid) && idIsPn) {
+		const mapping = { lid: lidJid, pn: id }
 		results.push({
 			event: 'lid-mapping.update',
-			data: { lid: lidJid, pn: id }
+			data: mapping
 		})
 	}
 
+	trace('sync-action-utils', 'processContactAction:return', { resultsCount: results.length, hasMapping: !!lidJid && idIsPn })
 	return results
 }
 
 export const emitSyncActionResults = (ev: BaileysEventEmitter, results: SyncActionResult[]): void => {
+	trace('sync-action-utils', 'emitSyncActionResults:enter', { resultsCount: results.length })
 	for (const result of results) {
 		if (result.event === 'contacts.upsert') {
 			ev.emit('contacts.upsert', result.data)
@@ -71,4 +76,5 @@ export const emitSyncActionResults = (ev: BaileysEventEmitter, results: SyncActi
 			ev.emit('lid-mapping.update', result.data)
 		}
 	}
+	trace('sync-action-utils', 'emitSyncActionResults:return', {})
 }

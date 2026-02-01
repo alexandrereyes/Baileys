@@ -1,3 +1,4 @@
+import { trace } from './trace-logger'
 import { Boom } from '@hapi/boom'
 import { exec } from 'child_process'
 import * as Crypto from 'crypto'
@@ -52,6 +53,7 @@ export const hkdfInfoKey = (type: MediaType) => {
 }
 
 export const getRawMediaUploadData = async (media: WAMediaUpload, mediaType: MediaType, logger?: ILogger) => {
+	trace('messages-media', 'getRawMediaUploadData:enter', { mediaType })
 	const { stream } = await getStream(media)
 	logger?.debug('got stream for raw upload')
 
@@ -74,6 +76,7 @@ export const getRawMediaUploadData = async (media: WAMediaUpload, mediaType: Med
 		stream.destroy()
 		const fileSha256 = hasher.digest()
 		logger?.debug('hashed data for raw upload')
+		trace('messages-media', 'getRawMediaUploadData:return', { fileLength })
 		return {
 			filePath: filePath,
 			fileSha256,
@@ -97,6 +100,7 @@ export async function getMediaKeys(
 	buffer: Uint8Array | string | null | undefined,
 	mediaType: MediaType
 ): Promise<MediaDecryptionKeyInfo> {
+	trace('messages-media', 'getMediaKeys:enter', { mediaType, hasBuffer: !!buffer })
 	if (!buffer) {
 		throw new Boom('Cannot derive from empty media key')
 	}
@@ -107,11 +111,13 @@ export async function getMediaKeys(
 
 	// expand using HKDF to 112 bytes, also pass in the relevant app info
 	const expandedMediaKey = await hkdf(buffer, 112, { info: hkdfInfoKey(mediaType) })
-	return {
+	const result = {
 		iv: expandedMediaKey.slice(0, 16),
 		cipherKey: expandedMediaKey.slice(16, 48),
 		macKey: expandedMediaKey.slice(48, 80)
 	}
+	trace('messages-media', 'getMediaKeys:return')
+	return result
 }
 
 /** Extracts video thumb using FFMPEG */
@@ -133,6 +139,7 @@ const extractVideoThumb = async (
 	})
 
 export const extractImageThumb = async (bufferOrFilePath: Readable | Buffer | string, width = 32) => {
+	trace('messages-media', 'extractImageThumb:enter', { width })
 	// TODO: Move entirely to sharp, removing jimp as it supports readable streams
 	// This will have positive speed and performance impacts as well as minimizing RAM usage.
 	if (bufferOrFilePath instanceof Readable) {
@@ -145,13 +152,15 @@ export const extractImageThumb = async (bufferOrFilePath: Readable | Buffer | st
 		const dimensions = await img.metadata()
 
 		const buffer = await img.resize(width).jpeg({ quality: 50 }).toBuffer()
-		return {
+		const result = {
 			buffer,
 			original: {
 				width: dimensions.width,
 				height: dimensions.height
 			}
 		}
+		trace('messages-media', 'extractImageThumb:return', { width: result.original.width, height: result.original.height })
+		return result
 	} else if ('jimp' in lib && typeof lib.jimp?.Jimp === 'object') {
 		const jimp = await (lib.jimp.Jimp as any).read(bufferOrFilePath)
 		const dimensions = {
@@ -161,10 +170,12 @@ export const extractImageThumb = async (bufferOrFilePath: Readable | Buffer | st
 		const buffer = await jimp
 			.resize({ w: width, mode: lib.jimp.ResizeStrategy.BILINEAR })
 			.getBuffer('image/jpeg', { quality: 50 })
-		return {
+		const result = {
 			buffer,
 			original: dimensions
 		}
+		trace('messages-media', 'extractImageThumb:return', { width: result.original.width, height: result.original.height })
+		return result
 	} else {
 		throw new Boom('No image processing library available')
 	}
@@ -177,6 +188,7 @@ export const generateProfilePicture = async (
 	mediaUpload: WAMediaUpload,
 	dimensions?: { width: number; height: number }
 ) => {
+	trace('messages-media', 'generateProfilePicture:enter', { dimensions })
 	let buffer: Buffer
 
 	const { width: w = 640, height: h = 640 } = dimensions || {}
@@ -210,9 +222,9 @@ export const generateProfilePicture = async (
 		throw new Boom('No image processing library available')
 	}
 
-	return {
-		img: await img
-	}
+	const result = { img: await img }
+	trace('messages-media', 'generateProfilePicture:return')
+	return result
 }
 
 /** gets the SHA256 of the given media message */
@@ -222,6 +234,7 @@ export const mediaMessageSHA256B64 = (message: WAMessageContent) => {
 }
 
 export async function getAudioDuration(buffer: Buffer | string | Readable) {
+	trace('messages-media', 'getAudioDuration:enter')
 	const musicMetadata = await import('music-metadata')
 	let metadata: IAudioMetadata
 	const options = {
@@ -235,6 +248,7 @@ export async function getAudioDuration(buffer: Buffer | string | Readable) {
 		metadata = await musicMetadata.parseStream(buffer, undefined, options)
 	}
 
+	trace('messages-media', 'getAudioDuration:return', { duration: metadata.format.duration })
 	return metadata.format.duration
 }
 
@@ -242,6 +256,7 @@ export async function getAudioDuration(buffer: Buffer | string | Readable) {
   referenced from and modifying https://github.com/wppconnect-team/wa-js/blob/main/src/chat/functions/prepareAudioWaveform.ts
  */
 export async function getAudioWaveform(buffer: Buffer | string | Readable, logger?: ILogger) {
+	trace('messages-media', 'getAudioWaveform:enter')
 	try {
 		// @ts-ignore
 		const { default: decoder } = await import('audio-decode')
@@ -278,6 +293,7 @@ export async function getAudioWaveform(buffer: Buffer | string | Readable, logge
 		// Generate waveform like WhatsApp
 		const waveform = new Uint8Array(normalizedData.map(n => Math.floor(100 * n)))
 
+		trace('messages-media', 'getAudioWaveform:return', { samples: waveform.length })
 		return waveform
 	} catch (e) {
 		logger?.debug('Failed to generate waveform: ' + e)
@@ -302,11 +318,14 @@ export const toBuffer = async (stream: Readable) => {
 }
 
 export const getStream = async (item: WAMediaUpload, opts?: RequestInit & { maxContentLength?: number }) => {
+	trace('messages-media', 'getStream:enter')
 	if (Buffer.isBuffer(item)) {
+		trace('messages-media', 'getStream:return', { type: 'buffer' })
 		return { stream: toReadable(item), type: 'buffer' } as const
 	}
 
 	if ('stream' in item) {
+		trace('messages-media', 'getStream:return', { type: 'readable' })
 		return { stream: item.stream, type: 'readable' } as const
 	}
 
@@ -314,13 +333,16 @@ export const getStream = async (item: WAMediaUpload, opts?: RequestInit & { maxC
 
 	if (urlStr.startsWith('data:')) {
 		const buffer = Buffer.from(urlStr.split(',')[1]!, 'base64')
+		trace('messages-media', 'getStream:return', { type: 'buffer_data' })
 		return { stream: toReadable(buffer), type: 'buffer' } as const
 	}
 
 	if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+		trace('messages-media', 'getStream:return', { type: 'remote' })
 		return { stream: await getHttpStream(item.url, opts), type: 'remote' } as const
 	}
 
+	trace('messages-media', 'getStream:return', { type: 'file' })
 	return { stream: createReadStream(item.url), type: 'file' } as const
 }
 
@@ -332,6 +354,7 @@ export async function generateThumbnail(
 		logger?: ILogger
 	}
 ) {
+	trace('messages-media', 'generateThumbnail:enter', { mediaType })
 	let thumbnail: string | undefined
 	let originalImageDimensions: { width: number; height: number } | undefined
 	if (mediaType === 'image') {
@@ -356,13 +379,16 @@ export async function generateThumbnail(
 		}
 	}
 
-	return {
+	const result = {
 		thumbnail,
 		originalImageDimensions
 	}
+	trace('messages-media', 'generateThumbnail:return', { hasThumbnail: !!thumbnail })
+	return result
 }
 
 export const getHttpStream = async (url: string | URL, options: RequestInit & { isStream?: true } = {}) => {
+	trace('messages-media', 'getHttpStream:enter', { url: url.toString() })
 	const response = await fetch(url.toString(), {
 		dispatcher: options.dispatcher,
 		method: 'GET',
@@ -373,6 +399,7 @@ export const getHttpStream = async (url: string | URL, options: RequestInit & { 
 	}
 
 	// @ts-ignore Node18+ Readable.fromWeb exists
+	trace('messages-media', 'getHttpStream:return')
 	return response.body instanceof Readable ? response.body : Readable.fromWeb(response.body as any)
 }
 
@@ -387,6 +414,7 @@ export const encryptedStream = async (
 	mediaType: MediaType,
 	{ logger, saveOriginalFileIfRequired, opts }: EncryptedStreamOptions = {}
 ) => {
+	trace('messages-media', 'encryptedStream:enter', { mediaType, saveOriginalFileIfRequired })
 	const { stream, type } = await getStream(media, opts)
 
 	logger?.debug('fetched media stream')
@@ -468,7 +496,7 @@ export const encryptedStream = async (
 
 		logger?.debug('encrypted data successfully')
 
-		return {
+		const result = {
 			mediaKey,
 			originalFilePath,
 			encFilePath,
@@ -477,6 +505,8 @@ export const encryptedStream = async (
 			fileSha256,
 			fileLength
 		}
+		trace('messages-media', 'encryptedStream:return', { fileLength })
+		return result
 	} catch (error) {
 		// destroy all streams with error
 		encFileWriteStream.destroy()
@@ -520,6 +550,7 @@ export const downloadContentFromMessage = async (
 	type: MediaType,
 	opts: MediaDownloadOptions = {}
 ) => {
+	trace('messages-media', 'downloadContentFromMessage:enter', { type })
 	const isValidMediaUrl = url?.startsWith('https://mmg.whatsapp.net/')
 	const downloadUrl = isValidMediaUrl ? url : getUrlFromDirectPath(directPath!)
 	if (!downloadUrl) {
@@ -528,7 +559,9 @@ export const downloadContentFromMessage = async (
 
 	const keys = await getMediaKeys(mediaKey, type)
 
-	return downloadEncryptedContent(downloadUrl, keys, opts)
+	const result = downloadEncryptedContent(downloadUrl, keys, opts)
+	trace('messages-media', 'downloadContentFromMessage:return')
+	return result
 }
 
 /**
@@ -540,6 +573,7 @@ export const downloadEncryptedContent = async (
 	{ cipherKey, iv }: MediaDecryptionKeyInfo,
 	{ startByte, endByte, options }: MediaDownloadOptions = {}
 ) => {
+	trace('messages-media', 'downloadEncryptedContent:enter', { hasRange: !!startByte || !!endByte })
 	let bytesFetched = 0
 	let startChunk = 0
 	let firstBlockIsIV = false
@@ -634,10 +668,12 @@ export const downloadEncryptedContent = async (
 			}
 		}
 	})
+	trace('messages-media', 'downloadEncryptedContent:return')
 	return fetched.pipe(output, { end: true })
 }
 
 export function extensionForMediaMessage(message: WAMessageContent) {
+	trace('messages-media', 'extensionForMediaMessage:enter')
 	const getExtension = (mimetype: string) => mimetype.split(';')[0]?.split('/')[1]
 	const type = Object.keys(message)[0] as Exclude<MessageType, 'toJSON'>
 	let extension: string
@@ -648,6 +684,7 @@ export function extensionForMediaMessage(message: WAMessageContent) {
 		extension = getExtension(messageContent.mimetype!)!
 	}
 
+	trace('messages-media', 'extensionForMediaMessage:return', { extension })
 	return extension
 }
 
@@ -680,6 +717,7 @@ export const uploadWithNodeHttp = async (
 	{ url, filePath, headers, timeoutMs, agent }: UploadParams,
 	redirectCount = 0
 ): Promise<MediaUploadResult | undefined> => {
+	trace('messages-media', 'uploadWithNodeHttp:enter', { redirectCount })
 	if (redirectCount > 5) {
 		throw new Error('Too many redirects')
 	}
@@ -797,6 +835,7 @@ const uploadWithFetch = async ({
  * across all runtimes. Monitor the GitHub issue for updates.
  */
 const uploadMedia = async (params: UploadParams, logger?: ILogger): Promise<MediaUploadResult | undefined> => {
+	trace('messages-media', 'uploadMedia:enter')
 	if (isNodeRuntime()) {
 		logger?.debug('Using Node.js https module for upload (avoids undici buffering bug)')
 		return uploadWithNodeHttp(params)
@@ -811,6 +850,7 @@ export const getWAUploadToServer = (
 	refreshMediaConn: (force: boolean) => Promise<MediaConnInfo>
 ): WAMediaUploadFunction => {
 	return async (filePath, { mediaType, fileEncSha256B64, timeoutMs }) => {
+		trace('messages-media', 'getWAUploadToServer:enter', { mediaType })
 		// send a query JSON to obtain the url & auth token to upload our media
 		let uploadInfo = await refreshMediaConn(false)
 
@@ -877,6 +917,7 @@ export const getWAUploadToServer = (
 			throw new Boom('Media upload failed on all hosts', { statusCode: 500 })
 		}
 
+		trace('messages-media', 'getWAUploadToServer:return', { mediaUrl: !!urls.mediaUrl })
 		return urls
 	}
 }
@@ -889,6 +930,7 @@ const getMediaRetryKey = (mediaKey: Buffer | Uint8Array) => {
  * Generate a binary node that will request the phone to re-upload the media & return the newly uploaded URL
  */
 export const encryptMediaRetryRequest = async (key: WAMessageKey, mediaKey: Buffer | Uint8Array, meId: string) => {
+	trace('messages-media', 'encryptMediaRetryRequest:enter', { messageId: key.id })
 	const recp: proto.IServerErrorReceipt = { stanzaId: key.id }
 	const recpBuffer = proto.ServerErrorReceipt.encode(recp).finish()
 
@@ -927,10 +969,12 @@ export const encryptMediaRetryRequest = async (key: WAMessageKey, mediaKey: Buff
 		]
 	}
 
+	trace('messages-media', 'encryptMediaRetryRequest:return')
 	return req
 }
 
 export const decodeMediaRetryNode = (node: BinaryNode) => {
+	trace('messages-media', 'decodeMediaRetryNode:enter', { id: node.attrs.id })
 	const rmrNode = getBinaryNodeChild(node, 'rmr')!
 
 	const event: BaileysEventMap['messages.media-update'][number] = {
@@ -960,6 +1004,7 @@ export const decodeMediaRetryNode = (node: BinaryNode) => {
 		}
 	}
 
+	trace('messages-media', 'decodeMediaRetryNode:return', { hasError: !!event.error })
 	return event
 }
 
@@ -968,9 +1013,12 @@ export const decryptMediaRetryData = async (
 	mediaKey: Uint8Array,
 	msgId: string
 ) => {
+	trace('messages-media', 'decryptMediaRetryData:enter', { msgId })
 	const retryKey = await getMediaRetryKey(mediaKey)
 	const plaintext = aesDecryptGCM(ciphertext, retryKey, iv, Buffer.from(msgId))
-	return proto.MediaRetryNotification.decode(plaintext)
+	const result = proto.MediaRetryNotification.decode(plaintext)
+	trace('messages-media', 'decryptMediaRetryData:return')
+	return result
 }
 
 export const getStatusCodeForMediaRetry = (code: number) =>

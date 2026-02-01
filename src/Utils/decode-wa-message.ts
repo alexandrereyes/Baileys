@@ -18,14 +18,19 @@ import {
 } from '../WABinary'
 import { unpadRandomMax16 } from './generics'
 import type { ILogger } from './logger'
+import { trace } from './trace-logger'
 
 export const getDecryptionJid = async (sender: string, repository: SignalRepositoryWithLIDStore): Promise<string> => {
+	trace('decode-wa-message', 'getDecryptionJid:enter', { sender })
 	if (isLidUser(sender) || isHostedLidUser(sender)) {
+		trace('decode-wa-message', 'getDecryptionJid:return', { result: sender, isLID: true })
 		return sender
 	}
 
 	const mapped = await repository.lidMapping.getLIDForPN(sender)
-	return mapped || sender
+	const result = mapped || sender
+	trace('decode-wa-message', 'getDecryptionJid:return', { result, isMapped: !!mapped })
+	return result
 }
 
 const storeMappingFromEnvelope = async (
@@ -35,6 +40,7 @@ const storeMappingFromEnvelope = async (
 	decryptionJid: string,
 	logger: ILogger
 ): Promise<void> => {
+	trace('decode-wa-message', 'storeMappingFromEnvelope:enter', { sender, decryptionJid })
 	// TODO: Handle hosted IDs
 	const { senderAlt } = extractAddressingContext(stanza)
 
@@ -43,8 +49,10 @@ const storeMappingFromEnvelope = async (
 			await repository.lidMapping.storeLIDPNMappings([{ lid: senderAlt, pn: sender }])
 			await repository.migrateSession(sender, senderAlt)
 			logger.debug({ sender, senderAlt }, 'Stored LID mapping from envelope')
+			trace('decode-wa-message', 'storeMappingFromEnvelope:return', { stored: true })
 		} catch (error) {
 			logger.warn({ sender, senderAlt, error }, 'Failed to store LID mapping')
+			trace('decode-wa-message', 'storeMappingFromEnvelope:error', { error: (error as Error).message })
 		}
 	}
 }
@@ -85,6 +93,7 @@ type MessageType =
 	| 'newsletter'
 
 export const extractAddressingContext = (stanza: BinaryNode) => {
+	trace('decode-wa-message', 'extractAddressingContext:enter', { stanzaTag: stanza.tag })
 	let senderAlt: string | undefined
 	let recipientAlt: string | undefined
 
@@ -108,11 +117,13 @@ export const extractAddressingContext = (stanza: BinaryNode) => {
 		//if (sender && senderAlt) senderAlt = transferDevice(sender, senderAlt)
 	}
 
-	return {
+	const result = {
 		addressingMode,
 		senderAlt,
 		recipientAlt
 	}
+	trace('decode-wa-message', 'extractAddressingContext:return', { addressingMode, hasSenderAlt: !!senderAlt, hasRecipientAlt: !!recipientAlt })
+	return result
 }
 
 /**
@@ -120,6 +131,7 @@ export const extractAddressingContext = (stanza: BinaryNode) => {
  * @note this will only parse the message, not decrypt it
  */
 export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: string) {
+	trace('decode-wa-message', 'decodeMessageNode:enter', { msgId: stanza.attrs.id, meId, meLid })
 	let msgType: MessageType
 	let chatId: string
 	let author: string
@@ -216,11 +228,13 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		fullMessage.status = proto.WebMessageInfo.Status.SERVER_ACK
 	}
 
-	return {
+	const result = {
 		fullMessage,
 		author,
 		sender: msgType === 'chat' ? author : chatId
 	}
+	trace('decode-wa-message', 'decodeMessageNode:return', { msgType, chatId, fromMe })
+	return result
 }
 
 export const decryptMessageNode = (
@@ -230,12 +244,14 @@ export const decryptMessageNode = (
 	repository: SignalRepositoryWithLIDStore,
 	logger: ILogger
 ) => {
+	trace('decode-wa-message', 'decryptMessageNode:enter', { msgId: stanza.attrs.id, meId, meLid })
 	const { fullMessage, author, sender } = decodeMessageNode(stanza, meId, meLid)
 	return {
 		fullMessage,
 		category: stanza.attrs.category,
 		author,
 		async decrypt() {
+			trace('decode-wa-message', 'decryptMessageNode.decrypt:enter', {})
 			let decryptables = 0
 			if (Array.isArray(stanza.content)) {
 				for (const { tag, attrs, content } of stanza.content) {
@@ -262,6 +278,7 @@ export const decryptMessageNode = (
 					}
 
 					decryptables += 1
+					trace('decode-wa-message', 'decryptMessageNode.decrypt:processing', { tag, type: attrs?.type })
 
 					let msgBuffer: Uint8Array
 
@@ -319,6 +336,7 @@ export const decryptMessageNode = (
 						} else {
 							fullMessage.message = msg
 						}
+						trace('decode-wa-message', 'decryptMessageNode.decrypt:success', { e2eType })
 					} catch (err: any) {
 						const errorContext = {
 							key: fullMessage.key,
@@ -330,6 +348,7 @@ export const decryptMessageNode = (
 						}
 
 						logger.error(errorContext, 'failed to decrypt message')
+						trace('decode-wa-message', 'decryptMessageNode.decrypt:error', { error: err.message, messageType: errorContext.messageType })
 
 						fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 						fullMessage.messageStubParameters = [err.message.toString()]
@@ -341,6 +360,9 @@ export const decryptMessageNode = (
 			if (!decryptables && !fullMessage.key?.isViewOnce) {
 				fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 				fullMessage.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT]
+				trace('decode-wa-message', 'decryptMessageNode.decrypt:return', { result: 'no_decryptables' })
+			} else {
+				trace('decode-wa-message', 'decryptMessageNode.decrypt:return', { decryptables })
 			}
 		}
 	}

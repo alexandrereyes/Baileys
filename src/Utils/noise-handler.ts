@@ -6,6 +6,7 @@ import type { BinaryNode } from '../WABinary'
 import { decodeBinaryNode } from '../WABinary'
 import { aesDecryptGCM, aesEncryptGCM, Curve, hkdf, sha256 } from './crypto'
 import type { ILogger } from './logger'
+import { trace } from './trace-logger'
 
 const IV_LENGTH = 12
 
@@ -60,6 +61,7 @@ export const makeNoiseHandler = ({
 	logger: ILogger
 	routingInfo?: Buffer | undefined
 }) => {
+	trace('noise-handler', 'makeNoiseHandler:enter', { hasRoutingInfo: !!routingInfo })
 	logger = logger.child({ class: 'ns' })
 
 	const data = Buffer.from(NOISE_MODE)
@@ -96,46 +98,61 @@ export const makeNoiseHandler = ({
 		}
 	}
 
-	const encrypt = (plaintext: Uint8Array): Uint8Array => {
+const encrypt = (plaintext: Uint8Array): Uint8Array => {
+		trace('noise-handler', 'encrypt:enter', { plaintextLen: plaintext.length, inTransport: !!transport })
 		if (transport) {
-			return transport.encrypt(plaintext)
+			const result = transport.encrypt(plaintext)
+			trace('noise-handler', 'encrypt:return', { resultLen: result.length, mode: 'transport' })
+			return result
 		}
 
 		const result = aesEncryptGCM(plaintext, encKey, generateIV(counter++), hash)
 		authenticate(result)
+		trace('noise-handler', 'encrypt:return', { resultLen: result.length, mode: 'handshake' })
 		return result
 	}
 
 	const decrypt = (ciphertext: Uint8Array): Uint8Array => {
+		trace('noise-handler', 'decrypt:enter', { ciphertextLen: ciphertext.length, inTransport: !!transport })
 		if (transport) {
-			return transport.decrypt(ciphertext)
+			const result = transport.decrypt(ciphertext)
+			trace('noise-handler', 'decrypt:return', { resultLen: result.length, mode: 'transport' })
+			return result
 		}
 
 		const result = aesDecryptGCM(ciphertext, decKey, generateIV(counter++), hash)
 		authenticate(ciphertext)
+		trace('noise-handler', 'decrypt:return', { resultLen: result.length, mode: 'handshake' })
 		return result
 	}
 
 	const localHKDF = async (data: Uint8Array) => {
+		trace('noise-handler', 'localHKDF:enter', { dataLen: data.length })
 		const key = await hkdf(Buffer.from(data), 64, { salt, info: '' })
-		return [key.subarray(0, 32), key.subarray(32)]
+		const result = [key.subarray(0, 32), key.subarray(32)]
+		trace('noise-handler', 'localHKDF:return', { keyLen: key.length })
+		return result
 	}
 
 	const mixIntoKey = async (data: Uint8Array) => {
+		trace('noise-handler', 'mixIntoKey:enter', { dataLen: data.length })
 		const [write, read] = await localHKDF(data)
 		salt = write!
 		encKey = read!
 		decKey = read!
 		counter = 0
+		trace('noise-handler', 'mixIntoKey:return', { saltLen: salt.length, encKeyLen: encKey.length, decKeyLen: decKey.length })
 	}
 
 	const finishInit = async () => {
+		trace('noise-handler', 'finishInit:enter', {})
 		isWaitingForTransport = true
 		const [write, read] = await localHKDF(new Uint8Array(0))
 		transport = new TransportState(write!, read!)
 		isWaitingForTransport = false
 
 		logger.trace('Noise handler transitioned to Transport state')
+		trace('noise-handler', 'finishInit:return', { inBytesLen: inBytes.length, hasPending: !!pendingOnFrame })
 
 		if (pendingOnFrame) {
 			logger.trace({ length: inBytes.length }, 'Flushing buffered frames after transport ready')
@@ -145,17 +162,26 @@ export const makeNoiseHandler = ({
 	}
 
 	const processData = async (onFrame: (buff: Uint8Array | BinaryNode) => void) => {
+		trace('noise-handler', 'processData:enter', { inBytesLen: inBytes.length })
 		let size: number | undefined
+		let frameCount = 0
 
 		while (true) {
-			if (inBytes.length < 3) return
+			if (inBytes.length < 3) {
+				trace('noise-handler', 'processData:return', { frameCount, reason: 'incomplete_header' })
+				return
+			}
 
 			size = (inBytes[0]! << 16) | (inBytes[1]! << 8) | inBytes[2]!
 
-			if (inBytes.length < size + 3) return
+			if (inBytes.length < size + 3) {
+				trace('noise-handler', 'processData:return', { frameCount, reason: 'incomplete_frame', expectedSize: size })
+				return
+			}
 
 			let frame: Uint8Array | BinaryNode = inBytes.subarray(3, size + 3)
 			inBytes = inBytes.subarray(size + 3)
+			frameCount++
 
 			if (transport) {
 				const result = transport.decrypt(frame)
@@ -165,6 +191,7 @@ export const makeNoiseHandler = ({
 			if (logger.level === 'trace') {
 				logger.trace({ msg: (frame as BinaryNode)?.attrs?.id }, 'recv frame')
 			}
+			trace('noise-handler', 'processData:processing', { frameNum: frameCount, isBinaryNode: !Buffer.isBuffer(frame) })
 
 			onFrame(frame)
 		}
@@ -180,6 +207,7 @@ export const makeNoiseHandler = ({
 		mixIntoKey,
 		finishInit,
 		processHandshake: async ({ serverHello }: proto.HandshakeMessage, noiseKey: KeyPair) => {
+			trace('noise-handler', 'processHandshake:enter', { hasEphemeral: !!serverHello?.ephemeral, hasStatic: !!serverHello?.static, hasPayload: !!serverHello?.payload })
 			authenticate(serverHello!.ephemeral!)
 			await mixIntoKey(Curve.sharedKey(privateKey, serverHello!.ephemeral!))
 
@@ -191,10 +219,12 @@ export const makeNoiseHandler = ({
 			const { intermediate: certIntermediate, leaf } = proto.CertChain.decode(certDecoded)
 			// leaf
 			if (!leaf?.details || !leaf?.signature) {
+				trace('noise-handler', 'processHandshake:error', { error: 'invalid noise leaf certificate' })
 				throw new Boom('invalid noise leaf certificate', { statusCode: 400 })
 			}
 
 			if (!certIntermediate?.details || !certIntermediate?.signature) {
+				trace('noise-handler', 'processHandshake:error', { error: 'invalid noise intermediate certificate' })
 				throw new Boom('invalid noise intermediate certificate', { statusCode: 400 })
 			}
 
@@ -211,23 +241,28 @@ export const makeNoiseHandler = ({
 			)
 
 			if (!verify) {
+				trace('noise-handler', 'processHandshake:error', { error: 'noise certificate signature invalid' })
 				throw new Boom('noise certificate signature invalid', { statusCode: 400 })
 			}
 
 			if (!verifyIntermediate) {
+				trace('noise-handler', 'processHandshake:error', { error: 'noise intermediate certificate signature invalid' })
 				throw new Boom('noise intermediate certificate signature invalid', { statusCode: 400 })
 			}
 
 			if (issuerSerial !== WA_CERT_DETAILS.SERIAL) {
+				trace('noise-handler', 'processHandshake:error', { error: 'certification match failed' })
 				throw new Boom('certification match failed', { statusCode: 400 })
 			}
 
 			const keyEnc = encrypt(noiseKey.public)
 			await mixIntoKey(Curve.sharedKey(noiseKey.private, serverHello!.ephemeral!))
 
+			trace('noise-handler', 'processHandshake:return', { keyEncLen: keyEnc.length, issuerSerial })
 			return keyEnc
 		},
 		encodeFrame: (data: Buffer | Uint8Array) => {
+			trace('noise-handler', 'encodeFrame:enter', { dataLen: data.byteLength, sentIntro, inTransport: !!transport })
 			if (transport) {
 				data = transport.encrypt(data)
 			}
@@ -247,12 +282,15 @@ export const makeNoiseHandler = ({
 
 			frame.set(data, introSize + 3)
 
+			trace('noise-handler', 'encodeFrame:return', { frameLen: frame.length, introSize })
 			return frame
 		},
 		decodeFrame: async (newData: Buffer | Uint8Array, onFrame: (buff: Uint8Array | BinaryNode) => void) => {
+			trace('noise-handler', 'decodeFrame:enter', { newDataLen: newData.length, inBytesLen: inBytes.length, isWaitingForTransport })
 			if (isWaitingForTransport) {
 				inBytes = Buffer.concat([inBytes, newData])
 				pendingOnFrame = onFrame
+				trace('noise-handler', 'decodeFrame:return', { action: 'buffered', newInBytesLen: inBytes.length })
 				return
 			}
 
@@ -263,6 +301,7 @@ export const makeNoiseHandler = ({
 			}
 
 			await processData(onFrame)
+			trace('noise-handler', 'decodeFrame:return', { action: 'processed', inBytesLen: inBytes.length })
 		}
 	}
 }

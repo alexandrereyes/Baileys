@@ -1,5 +1,6 @@
 import type { USyncQueryProtocol } from '../../Types/USync'
 import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildString } from '../../WABinary'
+import { trace } from '../../Utils/trace-logger'
 import { USyncUser } from '../USyncUser'
 
 export type BotProfileCommand = {
@@ -24,6 +25,7 @@ export class USyncBotProfileProtocol implements USyncQueryProtocol {
 	name = 'bot'
 
 	getQueryElement(): BinaryNode {
+		trace('UsyncBotProfileProtocol', 'getQueryElement', {})
 		return {
 			tag: 'bot',
 			attrs: {},
@@ -32,6 +34,7 @@ export class USyncBotProfileProtocol implements USyncQueryProtocol {
 	}
 
 	getUserElement(user: USyncUser): BinaryNode {
+		trace('UsyncBotProfileProtocol', 'getUserElement', { personaId: user.personaId })
 		return {
 			tag: 'bot',
 			attrs: {},
@@ -40,6 +43,7 @@ export class USyncBotProfileProtocol implements USyncQueryProtocol {
 	}
 
 	parser(node: BinaryNode): BotProfileInfo {
+		trace('UsyncBotProfileProtocol', 'parser:enter', { jid: node.attrs.jid })
 		const botNode = getBinaryNodeChild(node, 'bot')
 		const profile = getBinaryNodeChild(botNode, 'profile')
 
@@ -60,7 +64,7 @@ export class USyncBotProfileProtocol implements USyncQueryProtocol {
 			prompts.push(`${getBinaryNodeChildString(prompt, 'emoji')!} ${getBinaryNodeChildString(prompt, 'text')!}`)
 		}
 
-		return {
+		const result = {
 			isDefault: !!getBinaryNodeChild(profile, 'default'),
 			jid: node.attrs.jid!,
 			name: getBinaryNodeChildString(profile, 'name')!,
@@ -72,5 +76,7 @@ export class USyncBotProfileProtocol implements USyncQueryProtocol {
 			commands,
 			prompts
 		}
+		trace('UsyncBotProfileProtocol', 'parser:return', { jid: result.jid, commandsCount: commands.length, promptsCount: prompts.length })
+		return result
 	}
 }

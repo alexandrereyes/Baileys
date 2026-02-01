@@ -1,3 +1,4 @@
+import { trace } from '../Utils/trace-logger'
 import { promisify } from 'util'
 import { inflate } from 'zlib'
 import * as constants from './constants'
@@ -7,6 +8,7 @@ import type { BinaryNode, BinaryNodeCodingOptions } from './types'
 const inflatePromise = promisify(inflate)
 
 export const decompressingIfRequired = async (buffer: Buffer) => {
+	trace('wa-binary-decode', 'decompressingIfRequired:enter', { inputLen: buffer.length })
 	if (2 & buffer.readUInt8()) {
 		buffer = await inflatePromise(buffer.slice(1))
 	} else {
@@ -14,6 +16,7 @@ export const decompressingIfRequired = async (buffer: Buffer) => {
 		buffer = buffer.slice(1)
 	}
 
+	trace('wa-binary-decode', 'decompressingIfRequired:return', { outputLen: buffer.length })
 	return buffer
 }
 
@@ -22,6 +25,7 @@ export const decodeDecompressedBinaryNode = (
 	opts: Pick<BinaryNodeCodingOptions, 'DOUBLE_BYTE_TOKENS' | 'SINGLE_BYTE_TOKENS' | 'TAGS'>,
 	indexRef: { index: number } = { index: 0 }
 ): BinaryNode => {
+	trace('wa-binary-decode', 'decodeDecompressedBinaryNode:enter', { bufferLen: buffer.length, startIndex: indexRef.index })
 	const { DOUBLE_BYTE_TOKENS, SINGLE_BYTE_TOKENS, TAGS } = opts
 
 	const checkEOS = (length: number) => {
@@ -295,14 +299,20 @@ export const decodeDecompressedBinaryNode = (
 		}
 	}
 
-	return {
+	const node = {
 		tag: header,
 		attrs,
 		content: data
 	}
+
+	trace('wa-binary-decode', 'decodeDecompressedBinaryNode:return', { tag: header, attrsCount: Object.keys(attrs).length, hasContent: typeof data !== 'undefined', bytesConsumed: indexRef.index })
+	return node
 }
 
 export const decodeBinaryNode = async (buff: Buffer): Promise<BinaryNode> => {
+	trace('wa-binary-decode', 'decodeBinaryNode:enter', { bufferLen: buff.length })
 	const decompBuff = await decompressingIfRequired(buff)
-	return decodeDecompressedBinaryNode(decompBuff, constants)
+	const node = decodeDecompressedBinaryNode(decompBuff, constants)
+	trace('wa-binary-decode', 'decodeBinaryNode:return', { tag: node.tag })
+	return node
 }

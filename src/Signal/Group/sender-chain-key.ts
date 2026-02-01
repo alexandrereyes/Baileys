@@ -1,5 +1,6 @@
 import { calculateMAC } from 'libsignal/src/crypto'
 import { SenderMessageKey } from './sender-message-key'
+import { trace } from '../../Utils/trace-logger'
 
 export class SenderChainKey {
 	private readonly MESSAGE_KEY_SEED: Uint8Array = Buffer.from([0x01])
@@ -8,6 +9,7 @@ export class SenderChainKey {
 	private readonly chainKey: Buffer
 
 	constructor(iteration: number, chainKey: Uint8Array | Buffer) {
+		trace('sender-chain-key', 'SenderChainKey.constructor', { iteration, chainKeyLen: chainKey.length })
 		this.iteration = iteration
 		this.chainKey = Buffer.from(chainKey)
 	}
@@ -17,11 +19,14 @@ export class SenderChainKey {
 	}
 
 	public getSenderMessageKey(): SenderMessageKey {
+		trace('sender-chain-key', 'SenderChainKey.getSenderMessageKey', { iteration: this.iteration })
 		return new SenderMessageKey(this.iteration, this.getDerivative(this.MESSAGE_KEY_SEED, this.chainKey))
 	}
 
 	public getNext(): SenderChainKey {
-		return new SenderChainKey(this.iteration + 1, this.getDerivative(this.CHAIN_KEY_SEED, this.chainKey))
+		const nextChainKey = this.getDerivative(this.CHAIN_KEY_SEED, this.chainKey)
+		trace('sender-chain-key', 'SenderChainKey.getNext', { currentIteration: this.iteration, nextIteration: this.iteration + 1 })
+		return new SenderChainKey(this.iteration + 1, nextChainKey)
 	}
 
 	public getSeed(): Uint8Array {
@@ -29,6 +34,7 @@ export class SenderChainKey {
 	}
 
 	private getDerivative(seed: Uint8Array, key: Buffer): Uint8Array {
+		trace('sender-chain-key', 'SenderChainKey.getDerivative', { seedLen: seed.length, keyLen: key.length })
 		return calculateMAC(key, seed)
 	}
 }

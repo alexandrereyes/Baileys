@@ -1,5 +1,6 @@
 import { proto } from '../../../WAProto/index.js'
 import { CiphertextMessage } from './ciphertext-message'
+import { trace } from '../../Utils/trace-logger'
 
 interface SenderKeyDistributionMessageStructure {
 	id: number
@@ -25,6 +26,7 @@ export class SenderKeyDistributionMessage extends CiphertextMessage {
 		super()
 
 		if (serialized) {
+			trace('sender-key-distribution-message', 'SenderKeyDistributionMessage.constructor:deserialize', { serializedLen: serialized.length })
 			try {
 				const message = serialized.slice(1)
 				const distributionMessage = proto.SenderKeyDistributionMessage.decode(
@@ -42,10 +44,18 @@ export class SenderKeyDistributionMessage extends CiphertextMessage {
 					typeof distributionMessage.signingKey === 'string'
 						? Buffer.from(distributionMessage.signingKey, 'base64')
 						: distributionMessage.signingKey
+				trace('sender-key-distribution-message', 'SenderKeyDistributionMessage.constructor:deserialized', {
+					id: this.id,
+					iteration: this.iteration,
+					chainKeyLen: this.chainKey.length,
+					signatureKeyLen: this.signatureKey.length
+				})
 			} catch (e) {
+				trace('sender-key-distribution-message', 'SenderKeyDistributionMessage.constructor:error', { error: String(e) })
 				throw new Error(String(e))
 			}
 		} else {
+			trace('sender-key-distribution-message', 'SenderKeyDistributionMessage.constructor:create', { id, iteration })
 			const version = this.intsToByteHighAndLow(this.CURRENT_VERSION, this.CURRENT_VERSION)
 			this.id = id!
 			this.iteration = iteration!

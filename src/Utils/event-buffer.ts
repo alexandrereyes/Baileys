@@ -15,6 +15,7 @@ import { trimUndefined } from './generics'
 import type { ILogger } from './logger'
 import { updateMessageWithReaction, updateMessageWithReceipt } from './messages'
 import { isRealMessage, shouldIncrementChatUnread } from './process-message'
+import { trace } from './trace-logger'
 
 const BUFFERABLE_EVENT = [
 	'messaging-history.set',
@@ -68,6 +69,7 @@ type BaileysBufferableEventEmitter = BaileysEventEmitter & {
  * making the data processing more efficient.
  */
 export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter => {
+	trace('event-buffer', 'makeEventBuffer:enter', {})
 	const ev = new EventEmitter()
 	const historyCache = new Set<string>()
 
@@ -87,6 +89,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 	})
 
 	function buffer() {
+		trace('event-buffer', 'buffer:enter', { isBuffering })
 		if (!isBuffering) {
 			logger.debug('Event buffer activated')
 			isBuffering = true
@@ -109,6 +112,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 	}
 
 	function flush() {
+		trace('event-buffer', 'flush:enter', { isBuffering, bufferCount })
 		if (!isBuffering) {
 			return false
 		}
@@ -153,12 +157,14 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		data = newData
 
 		logger.trace({ conditionalChatUpdatesLeft }, 'released buffered events')
+		trace('event-buffer', 'flush:return', { success: true, conditionalChatUpdatesLeft })
 
 		return true
 	}
 
 	return {
 		process(handler) {
+			trace('event-buffer', 'process:enter', {})
 			const listener = async (map: BaileysEventData) => {
 				await handler(map)
 			}
@@ -169,6 +175,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			}
 		},
 		emit<T extends BaileysEvent>(event: BaileysEvent, evData: BaileysEventMap[T]) {
+			trace('event-buffer', 'emit:enter', { event, isBuffering })
 			// Check if this is a messages.upsert with a different type than what's buffered
 			// If so, flush the buffered messages first to avoid type overshadowing
 			if (event === 'messages.upsert') {
@@ -205,6 +212,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		flush,
 		createBufferedFunction(work) {
 			return async (...args) => {
+				trace('event-buffer', 'createBufferedFunction:enter', {})
 				buffer()
 				try {
 					const result = await work(...args)
@@ -267,7 +275,7 @@ function append<E extends BufferableEvent>(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	eventData: any,
 	logger: ILogger
-) {
+): boolean {
 	switch (event) {
 		case 'messaging-history.set':
 			for (const chat of eventData.chats as Chat[]) {
@@ -551,6 +559,8 @@ function append<E extends BufferableEvent>(
 		default:
 			throw new Error(`"${event}" cannot be buffered`)
 	}
+
+	return true
 
 	function absorbingChatUpdate(existing: Chat) {
 		const chatId = existing.id || ''

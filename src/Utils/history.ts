@@ -8,6 +8,7 @@ import { toNumber } from './generics'
 import type { ILogger } from './logger.js'
 import { normalizeMessageContent } from './messages'
 import { downloadContentFromMessage } from './messages-media'
+import { trace } from './trace-logger'
 
 const inflatePromise = promisify(inflate)
 
@@ -30,6 +31,7 @@ const extractPnFromMessages = (messages: proto.IHistorySyncMsg[]): string | unde
 }
 
 export const downloadHistory = async (msg: proto.Message.IHistorySyncNotification, options: RequestInit) => {
+	trace('history', 'downloadHistory:enter', { syncType: msg.syncType })
 	const stream = await downloadContentFromMessage(msg, 'md-msg-hist', { options })
 	const bufferArray: Buffer[] = []
 	for await (const chunk of stream) {
@@ -42,10 +44,12 @@ export const downloadHistory = async (msg: proto.Message.IHistorySyncNotificatio
 	buffer = await inflatePromise(buffer)
 
 	const syncData = proto.HistorySync.decode(buffer)
+	trace('history', 'downloadHistory:return', { conversationsCount: syncData.conversations?.length })
 	return syncData
 }
 
 export const processHistoryMessage = (item: proto.IHistorySync, logger?: ILogger) => {
+	trace('history', 'processHistoryMessage:enter', { syncType: item.syncType, progress: item.progress })
 	const messages: WAMessage[] = []
 	const contacts: Contact[] = []
 	const chats: Chat[] = []
@@ -60,11 +64,13 @@ export const processHistoryMessage = (item: proto.IHistorySync, logger?: ILogger
 		}
 	}
 
-	switch (item.syncType) {
+	const syncType = item.syncType
+	switch (syncType) {
 		case proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP:
 		case proto.HistorySync.HistorySyncType.RECENT:
 		case proto.HistorySync.HistorySyncType.FULL:
 		case proto.HistorySync.HistorySyncType.ON_DEMAND:
+			trace('history', 'processHistoryMessage:conversations', { conversationsCount: item.conversations?.length })
 			for (const chat of item.conversations! as Chat[]) {
 				contacts.push({
 					id: chat.id!,
@@ -121,6 +127,7 @@ export const processHistoryMessage = (item: proto.IHistorySync, logger?: ILogger
 
 			break
 		case proto.HistorySync.HistorySyncType.PUSH_NAME:
+			trace('history', 'processHistoryMessage:pushname', { count: item.pushnames?.length })
 			for (const c of item.pushnames!) {
 				contacts.push({ id: c.id!, notify: c.pushname! })
 			}
@@ -128,7 +135,7 @@ export const processHistoryMessage = (item: proto.IHistorySync, logger?: ILogger
 			break
 	}
 
-	return {
+	const result = {
 		chats,
 		contacts,
 		messages,
@@ -136,6 +143,8 @@ export const processHistoryMessage = (item: proto.IHistorySync, logger?: ILogger
 		syncType: item.syncType,
 		progress: item.progress
 	}
+	trace('history', 'processHistoryMessage:return', { chatsCount: chats.length, contactsCount: contacts.length, messagesCount: messages.length, mappingsCount: lidPnMappings.length })
+	return result
 }
 
 export const downloadAndProcessHistorySyncNotification = async (
@@ -143,6 +152,7 @@ export const downloadAndProcessHistorySyncNotification = async (
 	options: RequestInit,
 	logger?: ILogger
 ) => {
+	trace('history', 'downloadAndProcessHistorySyncNotification:enter', { syncType: msg.syncType })
 	let historyMsg: proto.HistorySync
 	if (msg.initialHistBootstrapInlinePayload) {
 		historyMsg = proto.HistorySync.decode(await inflatePromise(msg.initialHistBootstrapInlinePayload))
@@ -150,12 +160,13 @@ export const downloadAndProcessHistorySyncNotification = async (
 		historyMsg = await downloadHistory(msg, options)
 	}
 
-	return processHistoryMessage(historyMsg, logger)
+	const result = processHistoryMessage(historyMsg, logger)
+	trace('history', 'downloadAndProcessHistorySyncNotification:return', { syncType: result.syncType })
+	return result
 }
 
 export const getHistoryMsg = (message: proto.IMessage) => {
 	const normalizedContent = !!message ? normalizeMessageContent(message) : undefined
 	const anyHistoryMsg = normalizedContent?.protocolMessage?.historySyncNotification!
-
 	return anyHistoryMsg
 }

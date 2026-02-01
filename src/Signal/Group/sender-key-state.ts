@@ -1,5 +1,6 @@
 import { SenderChainKey } from './sender-chain-key'
 import { SenderMessageKey } from './sender-message-key'
+import { trace } from '../../Utils/trace-logger'
 
 interface SenderChainKeyStructure {
 	iteration: number
@@ -37,6 +38,7 @@ export class SenderKeyState {
 		senderKeyStateStructure?: SenderKeyStateStructure | null
 	) {
 		if (senderKeyStateStructure) {
+			trace('sender-key-state', 'SenderKeyState.constructor:deserialize', { keyId: senderKeyStateStructure.senderKeyId })
 			this.senderKeyStateStructure = {
 				...senderKeyStateStructure,
 				senderMessageKeys: Array.isArray(senderKeyStateStructure.senderMessageKeys)
@@ -44,6 +46,7 @@ export class SenderKeyState {
 					: []
 			}
 		} else {
+			trace('sender-key-state', 'SenderKeyState.constructor:create', { id, iteration })
 			if (signatureKeyPair) {
 				signatureKeyPublic = signatureKeyPair.public
 				signatureKeyPrivate = signatureKeyPair.private
@@ -69,6 +72,7 @@ export class SenderKeyState {
 	}
 
 	public getSenderChainKey(): SenderChainKey {
+		trace('sender-key-state', 'SenderKeyState.getSenderChainKey', { keyId: this.senderKeyStateStructure.senderKeyId })
 		return new SenderChainKey(
 			this.senderKeyStateStructure.senderChainKey.iteration,
 			this.senderKeyStateStructure.senderChainKey.seed
