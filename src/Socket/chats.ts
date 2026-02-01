@@ -70,7 +70,17 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		getMessage
 	} = config
 	const sock = makeSocket(config)
-	const { ev, ws, authState, generateMessageTag, sendNode, query, signalRepository, onUnexpectedError, executeUSyncQuery, sendUnifiedSession } = sock
+	const {
+		ev,
+		ws,
+		authState,
+		generateMessageTag,
+		sendNode,
+		query,
+		signalRepository,
+		onUnexpectedError,
+		sendUnifiedSession
+	} = sock
 
 	let privacySettings: { [_: string]: string } | undefined
 
@@ -266,7 +276,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			usyncQuery.withUser(new USyncUser().withId(jid))
 		}
 
-		const result = await executeUSyncQuery(usyncQuery)
+		const result = await sock.executeUSyncQuery(usyncQuery)
 		trace('chats', 'fetchStatus:DONE', { jids, hasResult: !!result })
 		if (result) {
 			return result.list
@@ -281,7 +291,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			usyncQuery.withUser(new USyncUser().withId(jid))
 		}
 
-		const result = await executeUSyncQuery(usyncQuery)
+		const result = await sock.executeUSyncQuery(usyncQuery)
 		trace('chats', 'fetchDisappearingDuration:DONE', { jids, hasResult: !!result })
 		if (result) {
 			return result.list
@@ -1246,7 +1256,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}
 	})
 
-	ev.on('connection.update', ({ connection, receivedPendingNotifications }: { connection?: string; receivedPendingNotifications?: boolean }) => {
+	ev.on('connection.update', ({ connection, receivedPendingNotifications }) => {
 		trace('chats', 'connection.update:RECEIVED', { connection, receivedPendingNotifications })
 		if (connection === 'open') {
 			if (fireInitQueries) {
@@ -1298,7 +1308,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}, 20_000)
 	})
 
-	ev.on('lid-mapping.update', async ({ lid, pn }: { lid: string; pn: string }) => {
+	ev.on('lid-mapping.update', async ({ lid, pn }) => {
 		try {
 			await signalRepository.lidMapping.storeLIDPNMappings([{ lid, pn }])
 		} catch (error) {

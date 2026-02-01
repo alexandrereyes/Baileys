@@ -98,7 +98,7 @@ export const makeNoiseHandler = ({
 		}
 	}
 
-const encrypt = (plaintext: Uint8Array): Uint8Array => {
+	const encrypt = (plaintext: Uint8Array): Uint8Array => {
 		trace('noise-handler', 'encrypt:enter', { plaintextLen: plaintext.length, inTransport: !!transport })
 		if (transport) {
 			const result = transport.encrypt(plaintext)
